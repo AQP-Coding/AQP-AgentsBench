@@ -1,5 +1,8 @@
 import json
 import subprocess
+import threading
+import shlex
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
@@ -136,3 +139,40 @@ def test_store_persists_runs_events_and_cli_answers(tmp_path):
     assert store.events("run1")[0]["text"] == "hello"
     with pytest.raises(ValueError):
         store.run_dir("../../outside")
+
+
+def test_git_preparation_never_invokes_ambient_credential_helpers(tmp_path, monkeypatch):
+    marker = tmp_path / "helper-invoked"
+    home = tmp_path / "home"
+    home.mkdir()
+    helper = tmp_path / "helper.sh"
+    helper.write_text("#!/bin/sh\nprintf invoked > " + shlex.quote(str(marker)) + "\n")
+    config = home / ".gitconfig"
+    config.write_text('[credential]\n    helper = !/bin/sh ' + str(helper) + '\n')
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
+    monkeypatch.setenv("GIT_TERMINAL_PROMPT", "0")
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1")
+
+    class Denied(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            self.send_response(401)
+            self.send_header("WWW-Authenticate", 'Basic realm="fixture"')
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Denied)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        with pytest.raises(ValueError, match="Git input preparation"):
+            prepare({"repository": {"source": f"http://127.0.0.1:{server.server_port}/repo.git",
+                                     "revision": "a" * 40}}, tmp_path / "clone")
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=5)
+    assert not marker.exists(), "Git invoked an unselected credential helper"

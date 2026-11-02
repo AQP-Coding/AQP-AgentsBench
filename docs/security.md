@@ -4,6 +4,7 @@
 
 - Agent containers receive only their dedicated workspace and selected configuration HOME. They do not receive the host Docker socket, host HOME, upstream provider credentials, inherited SSH agents, or ambient environment variables.
 - Docker operations are pinned to a local Unix socket. Remote SSH/TCP Docker transports are refused without probing; images are already local (`--pull=never`). A Docker daemon is a powerful host service: use trusted local images.
+- Git preparation uses an isolated configuration HOME, disables credential helpers, prompts, executable hooks and file-system monitors, and removes ambient Git/SSH/proxy overrides. Only public HTTP(S) repository URLs and explicitly selected local repositories are supported; private-repository authentication is not inherited.
 - Capabilities are dropped, no-new-privileges is set, and containers run as the invoking UID/GID. This is ordinary Docker isolation, not a virtual machine or a hardened hostile-code research sandbox.
 - Hidden evaluator files are unavailable during agent execution. The agent container is stopped before a separate evaluator sees read-only tests and a fresh read-only workspace snapshot. The agent never writes the host score record directly.
 - The model proxy requires a random per-run capability and forwards only to a fixed upstream. The real provider key is never passed to containers. Known provider keys and gateway tokens are redacted from platform event/error artifacts. Provider prompts/bodies are not logged by the gateway.

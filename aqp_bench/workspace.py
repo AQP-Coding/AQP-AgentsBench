@@ -1,8 +1,10 @@
 """Stage committed Git snapshots and byte-preserving attachments."""
 
 import hashlib
+import os
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -10,11 +12,24 @@ from .manifest import relative_path
 
 
 def git(*args):
-    try:
-        return subprocess.run(["git", *map(str, args)], check=True, text=True, capture_output=True,
-                              timeout=120).stdout.strip()
-    except subprocess.CalledProcessError as error:
-        raise ValueError("Git input preparation failed: " + error.stderr.strip()) from None
+    # A public Git URL is not permission to reuse host credential helpers,
+    # URL rewrites, SSH agents, askpass programs, or executable Git hooks.
+    environment = {key: value for key, value in os.environ.items()
+                   if not key.startswith("GIT_") and key not in
+                   ("SSH_AUTH_SOCK", "SSH_ASKPASS", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+                    "http_proxy", "https_proxy", "all_proxy")}
+    with tempfile.TemporaryDirectory(prefix="aqp-git-") as home:
+        environment.update(HOME=home, XDG_CONFIG_HOME=home, GIT_CONFIG_NOSYSTEM="1",
+                           GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull,
+                           GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="/bin/false",
+                           GIT_ALLOW_PROTOCOL="file:http:https", GCM_INTERACTIVE="never")
+        command = ["git", "-c", "credential.helper=", "-c", "core.hooksPath=/dev/null",
+                   "-c", "core.fsmonitor=false", *map(str, args)]
+        try:
+            return subprocess.run(command, env=environment, check=True, text=True, capture_output=True,
+                                  timeout=120).stdout.strip()
+        except subprocess.CalledProcessError as error:
+            raise ValueError("Git input preparation failed: " + error.stderr.strip()) from None
 
 
 def preflight_repository(repository):

@@ -59,10 +59,12 @@ def request(gateway, body=None, path='/v1/chat/completions', token=True, **heade
 
 def attempts(gateway, count=1):
     deadline = time.monotonic() + 3
-    while len(gateway.attempts) < count and time.monotonic() < deadline:
+    records = gateway.attempts
+    while (len(records) < count or any(r.get('pending') for r in records)) and time.monotonic() < deadline:
         time.sleep(.005)
-    assert len(gateway.attempts) == count
-    return gateway.attempts
+        records = gateway.attempts
+    assert len(records) == count and not any(r.get('pending') for r in records)
+    return records
 
 
 USAGE = {'prompt_tokens': 12, 'completion_tokens': 3, 'cost': .02,
