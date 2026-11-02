@@ -10,8 +10,11 @@ from .manifest import relative_path
 
 
 def git(*args):
-    return subprocess.run(["git", *map(str, args)], check=True, text=True, capture_output=True,
-                          timeout=120).stdout.strip()
+    try:
+        return subprocess.run(["git", *map(str, args)], check=True, text=True, capture_output=True,
+                              timeout=120).stdout.strip()
+    except subprocess.CalledProcessError as error:
+        raise ValueError("Git input preparation failed: " + error.stderr.strip()) from None
 
 
 def preflight_repository(repository):

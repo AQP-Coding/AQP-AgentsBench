@@ -35,6 +35,8 @@ Modification tasks add `repository: {"source": "../repo", "revision": "HEAD"}`. 
 
 Inputs are copied byte-for-byte. Attachment destinations must not overlap or replace existing repository files. Directory trees cannot contain symlinks; benchmark preparation never follows input symlinks into host data. Evaluation files stay outside the agent workspace during execution.
 
+Selected attachments, evaluator files, and harness files are frozen once per campaign before parallel trials start. Retained definitions point to those snapshots; explicit reruns reuse them rather than rereading changed original files. Initial workspace hashes and the starting commit identify task inputs independently of trial number or model selection.
+
 ## Core accounting
 
 Run agent time is the union of active main-agent/subagent intervals. When all tracked agents await human input, that interval is human-wait time; overlapping active work still counts. Cumulative agent duration is the sum of individual durations and can exceed elapsed run duration. Unknown child attribution is not guessed.

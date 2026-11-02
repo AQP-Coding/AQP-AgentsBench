@@ -104,6 +104,11 @@ class Store:
             row = db.execute("SELECT answer FROM questions WHERE run_id=? AND id=?", (identifier, request_id)).fetchone()
         return row[0] if row else None
 
+    def interventions(self, identifier):
+        with self._connection() as db:
+            return db.execute("SELECT COUNT(*) FROM questions WHERE run_id=? AND answer IS NOT NULL",
+                              (identifier,)).fetchone()[0]
+
     def stop(self, identifier):
         self.get(identifier)
         (self.run_dir(identifier) / "stop-requested").touch()
