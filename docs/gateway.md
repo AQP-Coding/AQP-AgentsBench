@@ -51,6 +51,12 @@ rollups are not added. Missing, negative, nonfinite, or malformed values remain
 `null`, never zero. `usage_complete` requires both token counts and billed cost.
 There is no follow-up generation lookup or automatic request retry.
 
+In-flight provider attempts are visible immediately with `pending: true` and
+unknown billing. Completion replaces that pending record under the same attempt
+ID instead of adding a second request. If execution stops before final usage
+arrives, retain the pending record and incomplete-accounting status rather than
+silently dropping an already-submitted attempt.
+
 A socket/protocol failure or incomplete stream sets `infrastructure_failed`;
 provider HTTP 429/5xx or equivalent SSE errors also set it. Ordinary provider 4xx
 is not classified as an infrastructure fault. Provider errors retain any supplied

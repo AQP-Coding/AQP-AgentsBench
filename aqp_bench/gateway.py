@@ -95,6 +95,7 @@ class Gateway:
         self._cost_limit = cost_limit
         self._known_cost = 0
         self._records = []
+        self._pending = {}
         self._lock = threading.Lock()
         self.token = secrets.token_urlsafe(32)
         self.limit_reached = threading.Event()
@@ -106,7 +107,7 @@ class Gateway:
     @property
     def attempts(self):
         with self._lock:
-            return copy.deepcopy(self._records)
+            return copy.deepcopy(self._records + list(self._pending.values()))
 
     def __enter__(self):
         gateway = self
@@ -232,7 +233,9 @@ class Gateway:
 
     def _finish(self, record, started):
         record['duration_seconds'] = time.monotonic() - started
+        record['pending'] = False
         with self._lock:
+            self._pending.pop(record['attempt_id'], None)
             self._records.append(copy.deepcopy(record))
             if record['cost_usd'] is not None:
                 self._known_cost += record['cost_usd']
@@ -264,6 +267,9 @@ class Gateway:
             record['parent_id'] = self._safe(parent)[:512]
         connection_type = http.client.HTTPSConnection if self._target.scheme == 'https' else http.client.HTTPConnection
         conn = connection_type(self._target.hostname, self._target.port, timeout=TIMEOUT)
+        if completion:
+            with self._lock:
+                self._pending[record['attempt_id']] = dict(record, pending=True, duration_seconds=0)
         sent = False
         try:
             suffix = '/chat/completions' if completion else '/models'

@@ -95,6 +95,31 @@ def test_forward_account_and_limit():
         assert gateway.attempts[0]['cost_usd'] == .02
 
 
+def test_inflight_attempt_is_visible_with_unknown_billing():
+    started, release = threading.Event(), threading.Event()
+    def respond(handler, body):
+        started.set()
+        assert release.wait(3)
+        reply(handler, {'usage': USAGE})
+    with provider(respond) as upstream, Gateway('key', upstream=upstream) as gateway:
+        client = threading.Thread(target=lambda: request(gateway, {'model': 'm'}))
+        client.start()
+        assert started.wait(2)
+        try:
+            records = gateway.attempts
+            assert len(records) == 1
+            assert records[0]['cost_usd'] is None
+            assert records[0]['pending'] is True
+        finally:
+            release.set()
+            client.join(3)
+        deadline = time.monotonic() + 2
+        while gateway.attempts[0].get('pending') and time.monotonic() < deadline:
+            time.sleep(.005)
+        assert len(gateway.attempts) == 1
+        assert gateway.attempts[0]['cost_usd'] == .02
+
+
 def test_auth_paths_bounds_and_discovery():
     seen = []
     def respond(h, body):
