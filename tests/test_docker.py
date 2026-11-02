@@ -14,7 +14,8 @@ def test_start_isolated_and_does_not_pull(tmp_path):
     args = run.call_args.args[0]
     assert '--pull=never' in args
     assert '--privileged' not in args and '-p' not in args and '--network=host' not in args
-    assert not any('docker.sock' in x for x in args)
+    assert not any('docker.sock' in x for x in args if x.startswith('type=bind'))
+    assert args[1:3] == ['--host', 'unix:///var/run/docker.sock'] or args[2].startswith('unix:///run/user/')
     assert 'host.docker.internal:host-gateway' in args
     assert 'HOME=/home/agent' in args
     assert args[-2:] == ['-c', 'exec sleep infinity']
@@ -25,11 +26,11 @@ def test_exec_and_spawn_are_argv_and_stderr_cannot_block():
     runtime = DockerRuntime()
     with patch('aqp_bench.docker.subprocess.run', return_value=subprocess.CompletedProcess([], 0, 'ok', '')) as run:
         runtime.exec('cid', ['printf', 'a; echo unsafe'])
-    assert run.call_args.args[0] == ['docker', 'exec', 'cid', 'printf', 'a; echo unsafe']
+    assert run.call_args.args[0] == runtime._argv('exec', 'cid', 'printf', 'a; echo unsafe')
     with patch('aqp_bench.docker.subprocess.Popen') as popen:
         runtime.spawn('cid', ['pi', '--mode', 'rpc'])
     assert popen.call_args.kwargs['stderr'] == subprocess.DEVNULL
-    assert popen.call_args.args[0][:4] == ['docker', 'exec', '-i', 'cid']
+    assert popen.call_args.args[0] == runtime._argv('exec', '-i', 'cid', 'pi', '--mode', 'rpc')
 
 
 @pytest.mark.parametrize('operation', ['stop', 'remove'])
@@ -62,3 +63,11 @@ def test_evaluation_mount_is_readonly_and_container_uses_host_identity(tmp_path)
     assert f'type=bind,src={evaluation},dst=/evaluation,readonly' in args
     assert f'type=bind,src={workspace},dst=/workspace,readonly' in args
     assert args[args.index('--user')+1] == f'{os.getuid()}:{os.getgid()}'
+
+
+def test_remote_docker_transport_is_rejected_without_probing(monkeypatch):
+    monkeypatch.setenv('DOCKER_HOST', 'ssh://production.invalid')
+    with patch('aqp_bench.docker.subprocess.run') as run:
+        with pytest.raises(ValueError, match='local'):
+            DockerRuntime()
+        run.assert_not_called()

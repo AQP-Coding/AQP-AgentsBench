@@ -12,6 +12,12 @@ without root-only caches or installation steps. The runtime never installs tools
 or pulls an image. Images and selected executable harness extensions are trusted
 inputs, not a security boundary against hostile programs.
 
+Only local Unix-socket Docker daemons are supported. `DOCKER_HOST=unix:///...`
+can explicitly select a local/rootless socket; SSH/TCP Docker hosts are rejected
+without probing them. The runtime ignores ambient Docker context selection and
+pins the selected local socket for every operation. It does not inspect or reuse
+SSH sessions, registry logins, or remote daemon credentials.
+
 | Runtime boundary | Behavior |
 |---|---|
 | Workspace | Dedicated host directory mounted at `/workspace` |

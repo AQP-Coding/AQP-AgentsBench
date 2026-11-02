@@ -10,8 +10,20 @@ import uuid
 
 
 class DockerRuntime:
+    def __init__(self):
+        default = f'unix:///run/user/{os.getuid()}/docker.sock' if Path(f'/run/user/{os.getuid()}/docker.sock').exists() else 'unix:///var/run/docker.sock'
+        self.host = os.environ.get('DOCKER_HOST', default)
+        if not self.host.startswith('unix:///') or '\0' in self.host or '\n' in self.host:
+            raise ValueError('Only a local Unix-socket Docker daemon is supported')
+        # A selected remote context must never override the local-only host.
+        self.environment = {k:v for k,v in os.environ.items() if k not in
+                            ('DOCKER_CONTEXT', 'DOCKER_HOST', 'DOCKER_TLS_VERIFY', 'DOCKER_CERT_PATH')}
+
+    def _argv(self, *args):
+        return ['docker', '--host', self.host, *args]
+
     def _run(self, args, *, timeout=300):
-        result = subprocess.run(['docker', *args], capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run(self._argv(*args), env=self.environment, capture_output=True, text=True, timeout=timeout)
         if result.returncode:
             # Do not reproduce argv: it can contain an ephemeral capability.
             raise RuntimeError(f'Docker operation {args[0]} failed: {result.stderr.strip()}')
@@ -54,12 +66,12 @@ class DockerRuntime:
 
     def exec(self, container: str, command: list[str], *, timeout: float = 300):
         self._validate(container, command)
-        return subprocess.run(['docker', 'exec', container, *command],
+        return subprocess.run(self._argv('exec', container, *command), env=self.environment,
                               capture_output=True, text=True, timeout=timeout)
 
     def spawn(self, container: str, command: list[str]):
         self._validate(container, command)
-        return subprocess.Popen(['docker', 'exec', '-i', container, *command],
+        return subprocess.Popen(self._argv('exec', '-i', container, *command), env=self.environment,
                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                 stderr=subprocess.DEVNULL)
 
@@ -75,12 +87,12 @@ class DockerRuntime:
 
     def _cleanup(self, operation, container):
         self._validate(container, ['cleanup'])
-        args = ['docker', operation]
+        args = self._argv(operation)
         if operation == 'rm':
             args += ['--force']
         else:
             args += ['--time', '2']
-        result = subprocess.run([*args, container], capture_output=True, text=True, timeout=30)
+        result = subprocess.run([*args, container], env=self.environment, capture_output=True, text=True, timeout=30)
         if result.returncode and 'No such container' not in result.stderr:
             raise RuntimeError(f'Docker {operation} failed: {result.stderr.strip()}')
 
