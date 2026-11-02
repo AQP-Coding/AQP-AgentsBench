@@ -20,7 +20,7 @@ For an installed CLI, use `python -m pip install -e '.[dev]'`, then replace `pyt
 
 ## Run a real campaign
 
-1. Prepare local Linux x86_64 Docker images containing the required tools and supported agent version. Images must run as your UID/GID; the platform never pulls images or installs agents implicitly.
+1. Prepare local Linux x86_64 Docker images containing the required tools and supported agent version. Start with the [Python/Pi/Gentle image](images/README.md). Images must run as your UID/GID; the platform never pulls images or installs agents implicitly.
 2. Write a [version 1 JSON manifest](docs/manifests.md). The bundled [demo manifest](aqp_bench/example/campaign.json) illustrates the shape but its placeholder image/model are **not** live settings.
 3. Validate without model calls or Docker:
 
