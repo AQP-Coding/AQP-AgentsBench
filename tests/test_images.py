@@ -36,3 +36,9 @@ def test_image_npm_lock_matches_explicit_tool_versions():
         entry = lock["packages"]["node_modules/" + name]
         assert entry["version"] == version
         assert entry["integrity"].startswith("sha512-")
+
+
+def test_documented_harness_command_preserves_benchmark_gateway_home():
+    readme = (IMAGE / "README.md").read_text()
+    example = json.loads(readme.split("```json\n", 1)[1].split("\n```", 1)[0])
+    assert example["agents"][0]["command"] == ["gentle-shell", "--link"]

@@ -16,15 +16,22 @@ Python dependencies are not duplicated in Dockerfile `pip install` arguments. No
 
 ## Select the harness explicitly
 
-`pi` is the plain agent. **Use `gentle-shell` to load the Gentle harness**:
+`pi` is the plain agent. **Use `gentle-shell --link` to load the Gentle harness with the benchmark's gateway configuration**:
 
 ```json
 {
-  "agents": [{"id": "pi-gentle", "kind": "pi", "command": ["gentle-shell"]}]
+  "agents": [{"id": "pi-gentle", "kind": "pi", "command": ["gentle-shell", "--link"]}]
 }
 ```
 
 Set each task's `image` to `aqp-agentsbench/pi-gentle-python:0.1.0`. The same image can run Python evaluation commands; stage hidden tests separately through the existing evaluation manifest.
+
+Bare `gentle-shell` creates an isolated `~/.gentle-shell/agent` home, hiding the
+benchmark's generated provider settings. Link mode preserves the explicit
+`PI_CODING_AGENT_DIR=/home/agent/.pi/agent`. This was checked without a model call:
+`get_state` and `get_available_models` expose the seeded `aqp` gateway model only
+with `--link`. The current combination emits a benign duplicate `codemode` tool
+notice; Gentle's own tool remains loaded.
 
 Packages and the native Gentle-ai binary live under `/opt/aqp/agent`, not inside `/home/agent`, so a fresh benchmark HOME does not hide the launcher or its package-local runtime. The image defaults to a non-root user and its tool files are readable/executable by the benchmark's host UID. No model credentials, host configuration or provider defaults are baked in; the benchmark supplies its gateway configuration at runtime.
 
@@ -41,5 +48,12 @@ docker --host unix:///var/run/docker.sock run --rm --network none \
 ```
 
 These checks make no model calls. A real prompt through OpenRouter remains a separate, explicitly budgeted validation step. The image's default suite uses loopback test fixtures; `--network none` prevents external traffic, not local loopback sockets.
+
+Offline image checks also passed as UID:GID `12345:12345` with fresh writable
+tmpfs HOME/workspace. On the tested WSL/Docker setup, a host `/tmp` bind mount
+appeared root-owned in a different daemon namespace; verify host-path sharing
+before a full benchmark run. `/app` is the read-only/root-owned test tree, not
+the writable agent workspace. These host-mount concerns are separate from image
+tool availability and credential-free RPC startup.
 
 Primary references: [Pi package](https://registry.npmjs.org/@earendil-works/pi-coding-agent/1.5.0), [Gentle-pi package](https://registry.npmjs.org/gentle-pi/4.5.1), [Gentle-ai Pi integration](https://github.com/Gentleman-Programming/gentle-ai/blob/v4.3.1/docs/pi.md), and [Gentle Shell](https://github.com/Gentleman-Programming/gentle-shell).
