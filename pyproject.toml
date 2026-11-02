@@ -19,6 +19,9 @@ aqp-bench = "aqp_bench.cli:main"
 [tool.setuptools.packages.find]
 include = ["aqp_bench*"]
 
+[tool.setuptools.package-data]
+aqp_bench = ["example/*.json", "example/*.csv", "example/*.py"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
