@@ -12,10 +12,12 @@ class Runtime:
     def __init__(self):
         self.containers = {}
         self.stopped = []
+        self.lifecycle = []
 
     def start(self, image, workspace, **kwargs):
         identity = str(len(self.containers))
         self.containers[identity] = (Path(workspace), kwargs)
+        self.lifecycle.append(("start", identity))
         if "evaluation" in kwargs:
             assert "0" in self.stopped
             assert kwargs["readonly_workspace"]
@@ -24,13 +26,22 @@ class Runtime:
     def exec(self, identity, command, **kwargs):
         workspace, options = self.containers[identity]
         assert not (workspace / "hidden.py").exists()
+        if command[:2] == ["sh", "-c"]:
+            return subprocess.CompletedProcess(command, 0, "", "")
         return subprocess.CompletedProcess(command, 0 if (workspace / "answer.txt").exists() else 1, "", "")
 
     def stop(self, identity):
         self.stopped.append(identity)
+        self.lifecycle.append(("stop", identity))
 
     def remove(self, identity):
-        pass
+        self.lifecycle.append(("remove", identity))
+
+    def transport_for(self, identity):
+        return "docker_cp"
+
+    def export_workspace(self, identity, workspace):
+        self.lifecycle.append(("export", identity))
 
 
 class Gateway:
@@ -89,6 +100,31 @@ def test_campaign_separates_hidden_evaluation_and_redacts_known_secrets(tmp_path
     assert "provider-key" not in persisted and "ephemeral-local-secret" not in persisted
     assert (store.run_dir(result["id"]) / "workspace/answer.txt").read_text() == "42"
     assert (store.run_dir(result["id"]) / "changes.diff").exists()
+
+
+def test_campaign_exports_copy_workspace_before_container_cleanup(tmp_path):
+    runtime = Runtime()
+    result = run_campaign(spec(tmp_path), Store(tmp_path / "artifacts"), api_key="provider-key",
+                          runtime_factory=lambda: runtime, gateway_factory=Gateway,
+                          adapter_factory=Adapter, notify=lambda _: None)[0]
+    assert result["workspace_transport"] == "docker_cp"
+    assert any("Docker bind mounts could not read" in warning for warning in result["warnings"])
+    assert runtime.lifecycle.index(("export", "0")) < runtime.lifecycle.index(("stop", "0"))
+    assert runtime.lifecycle.index(("stop", "0")) < runtime.lifecycle.index(("remove", "0"))
+
+
+def test_copy_back_failure_marks_infrastructure_failure_and_skips_evaluation(tmp_path):
+    class FailingCopyRuntime(Runtime):
+        def export_workspace(self, identity, workspace):
+            raise RuntimeError("docker cp export failed")
+
+    result = run_campaign(spec(tmp_path), Store(tmp_path / "artifacts"), api_key="provider-key",
+                          runtime_factory=FailingCopyRuntime, gateway_factory=Gateway,
+                          adapter_factory=Adapter, notify=lambda _: None)[0]
+    assert result["status"] == "infrastructure_failed"
+    assert result["infrastructure_incidents"] is True
+    assert "Workspace copy-back failed" in result["error"]
+    assert "evaluation" not in result
 
 
 def test_manual_stop_still_evaluates_workspace(tmp_path):

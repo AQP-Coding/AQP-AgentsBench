@@ -198,7 +198,15 @@ def _run(spec, campaign_id, store, api_key, runtime_factory, gateway_factory, ad
                 secrets.append(gateway.token)
                 url = gateway.url.replace("0.0.0.0", "host.docker.internal").replace("127.0.0.1", "host.docker.internal")
                 environment = harness.configure(home, spec["agent"]["kind"], spec["model"], url, gateway.token)
-                container = runtime.start(spec["task"]["image"], workspace, home=home, environment=environment)
+                container = runtime.start(spec["task"]["image"], workspace, home=home,
+                                          environment=environment, copy_back=True)
+                transport_for = getattr(runtime, "transport_for", None)
+                transport = transport_for(container) if callable(transport_for) else None
+                if transport is not None:
+                    result["workspace_transport"] = transport
+                if transport == "docker_cp":
+                    result["warnings"].append(
+                        "Docker bind mounts could not read the workspace; used Docker CLI copy transport.")
                 watcher = threading.Thread(target=watch, daemon=True)
                 watcher.start()
                 for command in spec["task"].get("setup", []):
@@ -234,9 +242,27 @@ def _run(spec, campaign_id, store, api_key, runtime_factory, gateway_factory, ad
                     if watcher is not None:
                         watcher.join(timeout=5)
                     timeline.finish()
-                    runtime.stop(container)
-                    runtime.remove(container)
-                    container = None
+                    export_error = None
+                    exporter = getattr(runtime, "export_workspace", None)
+                    if container is not None and callable(exporter):
+                        try:
+                            exporter(container, workspace)
+                        except Exception as error:
+                            export_error = error
+                            result["infrastructure_incidents"] = True
+                    cleanup_error = None
+                    if container is not None:
+                        for cleanup in (runtime.stop, runtime.remove):
+                            try:
+                                cleanup(container)
+                            except Exception as error:
+                                cleanup_error = cleanup_error or error
+                        if cleanup_error is None:
+                            container = None
+                    if export_error is not None:
+                        raise RuntimeError(f"Workspace copy-back failed: {export_error}") from export_error
+                    if cleanup_error is not None:
+                        raise cleanup_error
                 if gateway.limit_reached.is_set():
                     result["status"] = "incomplete"
                     cause.append("cost_limit")
@@ -248,7 +274,8 @@ def _run(spec, campaign_id, store, api_key, runtime_factory, gateway_factory, ad
         save()
         eval_start = time.monotonic()
         try:
-            result["evaluation"] = evaluate(runtime, workspace, spec["task"]["evaluation"])
+            result["evaluation"] = evaluate(runtime, workspace, spec["task"]["evaluation"],
+                                             scratch_parent=directory)
             result["status"] = result.pop("status_before_evaluation")
         except Exception as error:
             result["status"] = "evaluation_failed"
@@ -265,11 +292,11 @@ def _run(spec, campaign_id, store, api_key, runtime_factory, gateway_factory, ad
             watcher.join(timeout=5)
         timeline.finish()
         if container is not None:
-            try:
-                runtime.stop(container)
-                runtime.remove(container)
-            except Exception as error:
-                result["cleanup_error"] = str(error)
+            for cleanup in (runtime.stop, runtime.remove):
+                try:
+                    cleanup(container)
+                except Exception as error:
+                    result["cleanup_error"] = result.get("cleanup_error") or str(error)
         result["timing"] = timeline.snapshot()
         result["metrics"] = summarize_attempts(gateway.attempts if gateway is not None else attempts)
         (directory / "requests.json").write_text(json.dumps(_redact(gateway.attempts if gateway is not None else attempts, secrets), indent=2) + "\n")

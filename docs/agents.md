@@ -20,23 +20,44 @@ SSH sessions, registry logins, or remote daemon credentials.
 
 | Runtime boundary | Behavior |
 |---|---|
-| Workspace | Dedicated host directory mounted at `/workspace` |
-| Configuration | Selected isolated home at `/home/agent`; no host HOME inheritance |
+| Workspace | Dedicated host directory bind-mounted at `/workspace` when visible to the daemon; otherwise copied through the Docker CLI and exported before container removal |
+| Configuration | Selected isolated home at `/home/agent`; files are copied into container tmpfs, never bind-mounted from host temp paths |
 | User | Host UID/GID, dropped capabilities, no new privileges |
 | Networking | Normal bridge egress and `host.docker.internal` host-gateway alias |
 | Server | OpenCode listens inside its bridge container, authenticated with an ephemeral password; no published host port |
-| Evaluation | Separate container with a fresh snapshot, optional read-only `/workspace`, and trusted read-only `/evaluation` |
-| Cleanup | Caller stops container before evaluation and removes it afterward |
+| Evaluation | Separate container with a fresh snapshot under the run artifact directory, optional read-only `/workspace`, and trusted read-only `/evaluation` inputs; copy fallback removes write permission and runs tests as a UID distinct from the file owner |
+| Cleanup | Agent workspace is exported before stopping/removing its container; evaluation remains a separate container |
 
 `DockerRuntime.start(image, workspace, *, home=None, environment=None,
-evaluation=None, readonly_workspace=False)` returns a container identity.
-`exec(container, argv, timeout=300)` returns a text `CompletedProcess` so the caller
-checks the exit code. `spawn(container, argv)` returns binary stdin/stdout pipes;
-stderr is discarded rather than risking a blocked unread pipe. Protocol errors
-remain actionable; discarded diagnostic stderr is a troubleshooting limitation.
+evaluation=None, readonly_workspace=False, copy_back=False)` returns a container identity.
+Generated home staging is copied through the Docker client into container tmpfs,
+avoiding a bind mount from host temporary directories. Marker probes verify each
+requested host bind. If a probe fails, the runtime retries once without host binds
+and stages full directory trees into the container root filesystem with
+`docker cp`; Docker does not support direct `docker cp` to or from tmpfs. The
+fallback container starts as the agent UID with `/tmp` as its initial workdir, so
+copied workspace files and directories retain the expected ownership and modes.
+Read-only evaluator inputs are copied from a private host staging tree with write
+bits removed, and evaluator commands run as a distinct unprivileged UID. Copy
+failures are fatal and include both the probe and transfer errors. With
+`copy_back=True`, the caller must invoke `export_workspace(container, workspace)`
+before removal; export copies the complete rootfs workspace into a fresh host
+staging directory and replaces the prior tree, preserving deletions and root
+directory metadata.
+The normal bind path remains unchanged. Snapshots are placed under the selected
+artifact directory. `exec(container, argv, timeout=300)` returns a text `CompletedProcess` so
+the caller checks the exit code. `spawn(container, argv)` returns binary stdin/stdout
+pipes; Pi may opt into a bounded stderr pipe, which is drained concurrently and
+retained up to 64 KiB in startup/EOF diagnostics.
+Before each evaluator test, required files are checked inside the container; missing
+or unreadable mounts are reported as evaluator infrastructure errors, not test failures.
 `address(container)` returns its bridge IPv4 address. `stop`/`remove` tolerate
 missing containers, but do not suppress daemon failures. Host-to-bridge HTTP
-requires native Linux Docker networking; Docker Desktop/WSL is not proven.
+requires native Linux Docker networking. The tested Docker Desktop/WSL daemon could
+not read workspace files from the WSL filesystem; the runtime detects this with a
+temporary marker and falls back to client-mediated copy. A complete Docker copy
+round-trip is tested locally; provider/model-backed execution remains a separate
+integration check.
 
 ## Select a harness without inheriting secrets
 
