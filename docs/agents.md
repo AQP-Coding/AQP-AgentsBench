@@ -130,6 +130,14 @@ main and child sessions cannot honestly label every call `main`. Gateway request
 remain `unattributed` unless an audited harness supplies real request identities.
 Run-level gateway totals still include every observed provider attempt.
 
+Non-success provider responses retain a UTF-8 diagnostic body capped at 4 KiB.
+The gateway redacts the configured API key and its local capability token before
+forwarding the response to the agent or storing it in `requests.json`; truncated
+responses are marked and wrapped as JSON. Run results expose these diagnostics
+under `provider_errors` so CLI output and the dashboard can show provider-side
+causes (for example, OpenRouter guardrails) instead of only the agent's generic
+HTTP error. Treat provider error text as untrusted diagnostic data.
+
 No adapter automatically retries a whole run, classifies every protocol error as
 infrastructure failure, or uses agent-supplied token/cost estimates as billing
 truth. Configuring one provider is not proof of live compatibility or exhaustive

@@ -298,8 +298,17 @@ def _run(spec, campaign_id, store, api_key, runtime_factory, gateway_factory, ad
                 except Exception as error:
                     result["cleanup_error"] = result.get("cleanup_error") or str(error)
         result["timing"] = timeline.snapshot()
-        result["metrics"] = summarize_attempts(gateway.attempts if gateway is not None else attempts)
-        (directory / "requests.json").write_text(json.dumps(_redact(gateway.attempts if gateway is not None else attempts, secrets), indent=2) + "\n")
+        final_attempts = gateway.attempts if gateway is not None else attempts
+        result["metrics"] = summarize_attempts(final_attempts)
+        provider_errors = [{"attempt_id": attempt.get("attempt_id"),
+                            "status": attempt.get("status"),
+                            "model": attempt.get("model"),
+                            "body": attempt["provider_error_body"],
+                            "truncated": attempt.get("provider_error_truncated", False)}
+                           for attempt in final_attempts if attempt.get("provider_error_body")]
+        if provider_errors:
+            result["provider_errors"] = provider_errors
+        (directory / "requests.json").write_text(json.dumps(_redact(final_attempts, secrets), indent=2) + "\n")
         if result["status"] == "completed" and not result["metrics"]["request_count"]:
             result["warnings"].append("No model requests observed; accounting and gateway coverage are unverified.")
             result["metrics"].update(cost_usd=None, input_tokens=None, output_tokens=None, accounting_complete=False)

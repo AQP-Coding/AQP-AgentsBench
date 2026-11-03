@@ -18,6 +18,7 @@ from urllib.parse import urlsplit
 
 MAX_REQUEST = 8 * 1024 * 1024
 MAX_RESPONSE = 16 * 1024 * 1024
+MAX_PROVIDER_ERROR_BODY = 4096
 MAX_SSE_FRAME = 1024 * 1024
 TIMEOUT = 30
 
@@ -286,13 +287,58 @@ class Gateway:
                 record['error_kind'] = 'provider'
                 if response.status == 429 or response.status >= 500:
                     self.infrastructure_failed.set()
-                data = response.read(MAX_RESPONSE + 1)
+                secret_lengths = (len(self._api_key), len(self.token))
+                longest_secret = max(secret_lengths)
+                scan_limit = MAX_PROVIDER_ERROR_BODY + min(longest_secret, MAX_PROVIDER_ERROR_BODY) + 1
+                data = response.read(scan_limit)
+                truncated = len(data) > MAX_PROVIDER_ERROR_BODY
+                if truncated and longest_secret > MAX_PROVIDER_ERROR_BODY:
+                    error_body = '[provider error body omitted: credential exceeds diagnostic scan bound]'
+                else:
+                    error_body = self._safe(data.decode('utf-8', errors='replace'))
+                    safe_bytes = error_body.encode('utf-8')
+                    if len(safe_bytes) > MAX_PROVIDER_ERROR_BODY:
+                        error_body = safe_bytes[:MAX_PROVIDER_ERROR_BODY].decode('utf-8', errors='ignore')
+                        truncated = True
+                record['provider_error_body'] = error_body
+                record['provider_error_truncated'] = truncated
                 try:
-                    self._observe(record, json.loads(data))
+                    self._observe(record, json.loads(error_body))
                 except (ValueError, UnicodeDecodeError):
                     pass
                 sent = True
-                self._reply(handler, response.status, 'Upstream request failed')
+                if truncated:
+                    low, high = 0, len(error_body)
+                    while low < high:
+                        middle = (low + high + 1) // 2
+                        candidate = json.dumps({
+                            'error': 'Provider error response truncated',
+                            'provider_error_body': error_body[:middle],
+                        }).encode()
+                        if len(candidate) <= MAX_PROVIDER_ERROR_BODY:
+                            low = middle
+                        else:
+                            high = middle - 1
+                    client_body = json.dumps({
+                        'error': 'Provider error response truncated',
+                        'provider_error_body': error_body[:low],
+                    }).encode()
+                    handler.send_response(response.status)
+                    handler.send_header('Content-Type', 'application/json')
+                    handler.send_header('Content-Length', str(len(client_body)))
+                    handler.send_header('Cache-Control', 'no-store')
+                    handler.end_headers()
+                    self._write(handler, client_body)
+                else:
+                    content_type = response.getheader('Content-Type', '').lower()
+                    safe_type = 'application/json' if 'application/json' in content_type else 'text/plain; charset=utf-8'
+                    client_body = error_body.encode('utf-8')
+                    handler.send_response(response.status)
+                    handler.send_header('Content-Type', safe_type)
+                    handler.send_header('Content-Length', str(len(client_body)))
+                    handler.send_header('Cache-Control', 'no-store')
+                    handler.end_headers()
+                    self._write(handler, client_body)
                 return
             content_type = response.getheader('Content-Type', 'application/json')
             handler.send_response(response.status)

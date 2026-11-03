@@ -96,10 +96,33 @@ def test_campaign_separates_hidden_evaluation_and_redacts_known_secrets(tmp_path
     assert result["metrics"]["request_count"] == 1
     assert result["metrics"]["cost_usd"] == 0.01
     assert result["metrics"]["attribution_complete"] is False
+    assert "provider_errors" not in result
     persisted = (store.run_dir(result["id"]) / "transcript.jsonl").read_text()
     assert "provider-key" not in persisted and "ephemeral-local-secret" not in persisted
     assert (store.run_dir(result["id"]) / "workspace/answer.txt").read_text() == "42"
     assert (store.run_dir(result["id"]) / "changes.diff").exists()
+
+
+def test_campaign_exposes_sanitized_provider_errors(tmp_path):
+    class RejectedGateway(Gateway):
+        def __init__(self, key, **kwargs):
+            super().__init__(key, **kwargs)
+            self.attempts[0].update(status=404, model="vendor/model", error_kind="provider",
+                                    provider_error_body='{"error":"guardrail rejected"}',
+                                    provider_error_truncated=False)
+
+    class RejectedAdapter(Adapter):
+        def run(self, *args):
+            raise RuntimeError('404 "Upstream request failed"')
+
+    result = run_campaign(spec(tmp_path), Store(tmp_path / "artifacts"), api_key="provider-key",
+                          runtime_factory=Runtime, gateway_factory=RejectedGateway,
+                          adapter_factory=RejectedAdapter, notify=lambda _: None)[0]
+    assert result["status"] == "agent_failed"
+    assert result["provider_errors"] == [{"attempt_id": "one", "status": 404,
+                                           "model": "vendor/model",
+                                           "body": '{"error":"guardrail rejected"}',
+                                           "truncated": False}]
 
 
 def test_campaign_exports_copy_workspace_before_container_cleanup(tmp_path):

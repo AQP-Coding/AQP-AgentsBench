@@ -173,20 +173,80 @@ def test_stream_is_live_and_usage_not_summed():
 @pytest.mark.parametrize('status', [400, 429, 503, 302])
 def test_provider_errors_and_redirects(status):
     seen = []
+    capability = []
     def respond(h, body):
         seen.append(1)
         h.send_response(status)
         h.send_header('Location', 'http://127.0.0.1:1/secret')
+        body = json.dumps({'error': {'message': 'guardrail rejected', 'token': 'private-key',
+                                     'capability': capability[0]}}).encode()
+        h.send_header('Content-Length', str(len(body)))
         h.end_headers()
-        h.wfile.write(b'{"error":"private-key"}')
+        h.wfile.write(body)
     with provider(respond) as upstream, Gateway('private-key', upstream=upstream) as gateway:
+        capability.append(gateway.token)
         code, body = request(gateway, {'model': 'm'})
-        assert code == status and b'private-key' not in body
+        assert code == status
+        assert b'guardrail rejected' in body and b'[redacted]' in body
+        assert b'private-key' not in body
+        assert gateway.token.encode() not in body
         record = attempts(gateway)[0]
         assert record['error_kind'] == 'provider'
+        assert 'guardrail rejected' in record['provider_error_body']
+        assert 'private-key' not in record['provider_error_body']
+        assert gateway.token not in record['provider_error_body']
+        assert record['provider_error_truncated'] is False
         assert record['cost_usd'] is None and not record['usage_complete']
         assert gateway.infrastructure_failed.is_set() == (status in (429, 503))
         assert seen == [1]
+
+
+def test_provider_error_body_is_bounded_and_marks_truncation():
+    diagnostic = 'x' * 6000
+    def respond(handler, body):
+        handler.send_response(400)
+        handler.send_header('Content-Type', 'application/json')
+        handler.send_header('Content-Length', str(len(diagnostic) + 12))
+        handler.end_headers()
+        handler.wfile.write(('{"error":"' + diagnostic + '"}').encode())
+    with provider(respond) as upstream, Gateway('key', upstream=upstream) as gateway:
+        code, body = request(gateway, {'model': 'm'})
+        record = attempts(gateway)[0]
+        assert code == 400
+        assert len(body) <= 4096
+        assert len(record['provider_error_body'].encode()) <= 4096
+        assert record['provider_error_truncated'] is True
+        assert b'truncated' in body
+
+
+@pytest.mark.parametrize('diagnostic', [b'\x80' * 5000, b'\x00' * 5000])
+def test_provider_error_bounds_invalid_utf8_and_json_escaping(diagnostic):
+    def respond(handler, body):
+        handler.send_response(400)
+        handler.send_header('Content-Length', str(len(diagnostic)))
+        handler.end_headers()
+        handler.wfile.write(diagnostic)
+    with provider(respond) as upstream, Gateway('key', upstream=upstream) as gateway:
+        code, body = request(gateway, {'model': 'm'})
+        record = attempts(gateway)[0]
+        assert code == 400
+        assert len(body) <= 4096
+        assert len(record['provider_error_body'].encode()) <= 4096
+        assert record['provider_error_truncated'] is True
+
+
+def test_provider_error_redacts_credentials_crossing_diagnostic_boundary():
+    diagnostic = b'x' * 4090 + b'private-key'
+    def respond(handler, body):
+        handler.send_response(400)
+        handler.send_header('Content-Length', str(len(diagnostic)))
+        handler.end_headers()
+        handler.wfile.write(diagnostic)
+    with provider(respond) as upstream, Gateway('private-key', upstream=upstream) as gateway:
+        assert request(gateway, {'model': 'm'})[0] == 400
+        record = attempts(gateway)[0]
+        assert 'private-key' not in record['provider_error_body']
+        assert not record['provider_error_body'].endswith('privat')
 
 
 def test_missing_usage_and_network_fault():
