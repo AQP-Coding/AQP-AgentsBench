@@ -30,6 +30,13 @@ class _DemoRuntime:
 
     def exec(self, container, command, *, timeout=60):
         workspace, options = self.containers[container]
+        if command[:2] == ["sh", "-c"] and command[3] == "aqp-evaluation-preflight":
+            root = options["evaluation"]
+            for path in command[4:]:
+                target = root / Path(path).relative_to("/evaluation")
+                if not target.is_file() or not target.stat().st_mode & 0o444:
+                    return subprocess.CompletedProcess(command, 1, "", f"missing or unreadable: {path}\n")
+            return subprocess.CompletedProcess(command, 0, "", "")
         if len(command) != 3 or command[0] != "python" or command[1] != "/evaluation/check.py":
             raise ValueError("Offline demo executes only its fixed trusted evaluator")
         return subprocess.run([sys.executable, str(options["evaluation"] / "check.py"), command[2]],

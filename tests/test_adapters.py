@@ -92,6 +92,19 @@ def test_pi_prompt_failure_is_actionable():
         pi_run([{'type':'response','success':False,'error':'wrong model'}])
 
 
+def test_pi_exit_reports_exit_code_and_captured_stderr():
+    import subprocess
+    import sys
+    program = "import sys; sys.stdin.buffer.readline(); print('startup diagnostic: missing provider config', file=sys.stderr); sys.exit(17)"
+    runtime = Mock()
+    runtime.spawn.return_value = subprocess.Popen(
+        [sys.executable, '-c', program], stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    with pytest.raises(RuntimeError, match=r'exit code 17.*missing provider config'):
+        PiAdapter(runtime, 'cid').run('prompt', 'org/model', lambda _: None,
+                                      lambda *args: None, threading.Event())
+
+
 def test_pi_real_jsonl_transport_dialog_reply_and_unicode():
     import subprocess
     import sys

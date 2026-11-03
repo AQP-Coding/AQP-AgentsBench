@@ -13,6 +13,9 @@ from urllib.parse import quote
 from urllib.request import Request, build_opener, ProxyHandler, HTTPRedirectHandler
 
 
+_STDERR_LIMIT = 64 * 1024
+
+
 def _emit(callback, kind, agent_id='main', parent_id=None, **fields):
     callback({'type':kind, 'agent_id':agent_id, 'parent_id':parent_id, **fields})
 
@@ -71,9 +74,42 @@ class PiAdapter:
 
     def run(self, prompt, model, on_event, ask, stop):
         process = self.runtime.spawn(self.container, [*self.command, '--mode', 'rpc', '--no-session',
-                                                     '--provider', 'aqp', '--model', model])
+                                                     '--provider', 'aqp', '--model', model], capture_stderr=True)
         records = queue.Queue()
         write_lock = threading.Lock()
+        stderr_bytes = bytearray()
+        stderr_truncated = threading.Event()
+
+        def read_stderr():
+            stream = getattr(process, 'stderr', None)
+            if stream is None:
+                return
+            while chunk := stream.read(4096):
+                room = _STDERR_LIMIT - len(stderr_bytes)
+                if room > 0:
+                    stderr_bytes.extend(chunk[:room])
+                if len(chunk) > room:
+                    stderr_truncated.set()
+
+        stderr_reader = threading.Thread(target=read_stderr, daemon=True)
+        stderr_reader.start()
+
+        def process_exit_error():
+            try:
+                process.wait(timeout=1)
+            except (subprocess.TimeoutExpired, AttributeError):
+                pass
+            stderr_reader.join(timeout=1)
+            exit_code = process.poll()
+            code = 'unknown' if exit_code is None else str(exit_code)
+            detail = bytes(stderr_bytes).decode('utf-8', errors='replace').strip()
+            message = f'Pi RPC stdout closed before agent_settled (exit code {code}).'
+            if detail:
+                message += f' Pi stderr: {detail}'
+            if stderr_truncated.is_set():
+                message += ' [stderr truncated at 65536 bytes]'
+            return RuntimeError(message)
+
         def send(record):
             with write_lock:
                 process.stdin.write(json.dumps(record).encode('utf-8') + b'\n')
@@ -103,7 +139,7 @@ class PiAdapter:
                 except queue.Empty:
                     continue
                 if record is None:
-                    raise RuntimeError('Pi exited before agent_settled completion; check RPC capability/version')
+                    raise process_exit_error()
                 if isinstance(record, Exception):
                     raise RuntimeError('Invalid Pi RPC output') from record
                 kind = record.get('type')
@@ -147,6 +183,7 @@ class PiAdapter:
         finally:
             _finish_process(process)
             reader.join(timeout=2)
+            stderr_reader.join(timeout=2)
             _emit(on_event, 'agent_end')
 
 

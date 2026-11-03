@@ -50,10 +50,10 @@ docker --host unix:///var/run/docker.sock run --rm --network none \
 These checks make no model calls. A real prompt through OpenRouter remains a separate, explicitly budgeted validation step. The image's default suite uses loopback test fixtures; `--network none` prevents external traffic, not local loopback sockets.
 
 Offline image checks also passed as UID:GID `12345:12345` with fresh writable
-tmpfs HOME/workspace. On the tested WSL/Docker setup, a host `/tmp` bind mount
-appeared root-owned in a different daemon namespace; verify host-path sharing
-before a full benchmark run. `/app` is the read-only/root-owned test tree, not
-the writable agent workspace. These host-mount concerns are separate from image
-tool availability and credential-free RPC startup.
+tmpfs HOME/workspace. On the tested WSL/Docker setup, Docker could not read WSL
+workspace files through a bind mount. The runner now checks workspace visibility
+before launching the agent and reports this directly. Enable Docker Desktop WSL
+file sharing or use a local Linux Docker daemon that can access the repository.
+`/app` is the read-only/root-owned test tree, not the writable agent workspace.
 
 Primary references: [Pi package](https://registry.npmjs.org/@earendil-works/pi-coding-agent/1.5.0), [Gentle-pi package](https://registry.npmjs.org/gentle-pi/4.5.1), [Gentle-ai Pi integration](https://github.com/Gentleman-Programming/gentle-ai/blob/v4.3.1/docs/pi.md), and [Gentle Shell](https://github.com/Gentleman-Programming/gentle-shell).
