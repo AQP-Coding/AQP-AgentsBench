@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "models": ["demo/offline"],
+  "agents": [{"id": "pi-protocol-simulation", "kind": "pi"}],
+  "tasks": [{
+    "id": "csv-report",
+    "prompt": "Read data/numbers.csv and write the integer sum to report.txt, followed by a newline.",
+    "image": "offline-demo-placeholder",
+    "attachments": [{"source": "numbers.csv", "target": "data/numbers.csv"}],
+    "evaluation": {
+      "files": [{"source": "check.py", "target": "check.py"}],
+      "tests": [
+        {"id": "correct-total", "score": 4, "command": ["python", "/evaluation/check.py", "total"]},
+        {"id": "output-format", "score": 1, "command": ["python", "/evaluation/check.py", "format"]}
+      ]
+    }
+  }]
+}

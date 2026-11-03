@@ -1,0 +1,10 @@
+{
+  "name": "aqp-pi-gentle-python-tools",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pinned agent tools for the Python/Pi/Gentle benchmark image",
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "1.5.0",
+    "gentle-pi": "4.5.1"
+  }
+}

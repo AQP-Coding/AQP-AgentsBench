@@ -1,0 +1,40 @@
+# Initial implementation contracts
+
+These internal boundaries allow the core, agent integration, and gateway to be implemented independently. Python 3.11+, standard library runtime, pytest for tests. All artifact strings are English. Never push or create PRs.
+
+## Core (parent-owned)
+
+`manifest.load_campaign(path) -> dict` validates JSON and returns normalized data with absolute source paths; `expand_runs(campaign) -> list[dict]` produces task/agent/model/harness/trial combinations. A run specification has `task`, `agent`, `model`, `harness`, `trial`, `limits`. Tasks have `id`, `prompt`, `image`, `setup` (lists of argv lists), optional `repository: {source, revision}`, `attachments: [{source, target}]`, `evaluation: {image, tests: [{id, score, command: [str,...]}]}`. Evaluation commands run in a separate container after stopping the agent container. Trusted test files live outside the agent workspace and can be mounted only into the evaluator at `/evaluation`. Agent workspace is mounted at `/workspace`; evaluator mounts a fresh copy, never shares agent processes.
+
+Agent definitions: `{id, kind: "pi"|"opencode", command?: [str,...]}`. Model definitions are OpenRouter model IDs. Harness definitions: `{id, mode: "explicit"|"inherit", files: [{source, target}]}`. Targets are safe relative paths beneath an isolated configuration home; do not copy a whole HOME or ambient environment. Campaign fields: `version: 1`, `tasks`, `agents`, `models`, `harnesses`, `trials`, `concurrency`, `limits: {agent_seconds?, cost_usd?}`. Defaults: one trial, one worker, empty explicit harness. Offline `demo` is a separate CLI command, never an agent kind in live manifests.
+
+`metrics.Timeline` consumes normalized lifecycle events; `metrics.summarize_attempts(attempts)` aggregates gateway attempts without duplicate provider usage. `store.Store(root)` persists JSON-safe results in SQLite and per-run artifacts. `workspace.prepare(task, destination) -> metadata` stages committed repository snapshots and original attachments, returning `commit`, `warnings`, and hashes. No stage or evaluator may modify the input repository.
+
+## Agent/runtime unit (T3)
+
+Allowed modules: `aqp_bench/adapters.py`, `aqp_bench/docker.py`, `aqp_bench/harness.py`, associated tests and `docs/agents.md`. Package is at repository root, not `src/`.
+
+- `docker.DockerRuntime()` manages containers using the Docker CLI without Python third-party dependencies.
+- `start(image: str, workspace: Path, *, home: Path|None=None, environment: dict|None=None) -> str` starts a named container, working directory `/workspace`, isolated HOME `/home/agent`, normal egress, host gateway alias `host.docker.internal`; returns container ID. No Docker socket, host credentials, privileged mode, or whole host HOME mounts.
+- `exec(container: str, command: list[str], *, timeout: float=300) -> subprocess.CompletedProcess[str]` executes argv in the container.
+- `spawn(container: str, command: list[str]) -> subprocess.Popen[bytes]` gives binary stdin/stdout/stderr for Pi RPC or server lifecycle. Pi stderr is drained concurrently and bounded to 64 KiB in surfaced exit diagnostics; stderr readers must not deadlock a process.
+- `address(container: str) -> str` returns the container IPv4 bridge address for a host OpenCode client. Do not publish unauthenticated agent APIs on all host interfaces.
+- `stop(container: str) -> None` stops all container processes; `remove(container: str) -> None` removes the container. Both tolerate already-stopped/missing containers but surface real daemon errors.
+- `harness.stage(files: list[dict], destination: Path) -> None` copies only explicitly selected file/directory trees to safe relative targets, rejecting traversal, symlink escape and secret-bearing config. `harness.configure(home: Path, kind: str, model: str, gateway_url: str, token: str) -> dict[str,str]` configures exclusively the benchmark gateway for Pi/OpenCode and returns explicit container environment settings. Preserve harness instructions/hooks/skills; reject incompatible provider configuration instead of silently wiping it. Token is an ephemeral local gateway capability, not the upstream OpenRouter key. Never include real keys in persisted files.
+- `adapters.PiAdapter(runtime, container, command=None)` and `adapters.OpenCodeAdapter(runtime, container, command=None)` expose `run(prompt: str, model: str, on_event: Callable[[dict],None], ask: Callable[[str,dict],Any], stop: threading.Event) -> None`.
+- Normalized event dictionaries: `{"type":"agent_start","agent_id":"main","parent_id":null}`; `agent_wait`, `agent_resume`, `agent_end` with same ID; `{"type":"message","agent_id":...,"text":...}`; `{"type":"infrastructure_error","message":...}` only with protocol evidence. Use actual child identity when exposed; never fabricate child measurements. Ask invokes `ask(question, metadata)` synchronously for CLI answer, while other event readers must remain alive. Every submitted reply counts once in parent integration. Time only the blocked agent, not the entire run. API/protocol errors raise an actionable exception; never equate prompt acceptance with completion. Document version/capability limits honestly.
+
+## Gateway unit (T4)
+
+Allowed module: `aqp_bench/gateway.py`, associated tests and `docs/gateway.md`. Keep standalone; no imports from parent-owned files.
+
+- `Gateway(api_key: str, *, host="127.0.0.1", port=0, upstream="https://openrouter.ai/api/v1", on_attempt=None, cost_limit=None)` is a context manager with `.url` ending `/v1`, `.token` (fresh random local capability), `.attempts` (thread-safe snapshots of JSON-safe attempt dictionaries), `.limit_reached` (threading.Event), `.infrastructure_failed` (threading.Event).
+- Host runner passes host `0.0.0.0` only for container reachability; request capability required. No key or prompt logging. Container gateway URL replaces host with `host.docker.internal`. Dashboard remains loopback.
+- Proxy `/v1/chat/completions` and model discovery as needed for supported adapters. Do not permit arbitrary URL forwarding, query SSRF, credential forwarding, or upstream redirects. Upstream target is fixed at construction and must be validated. Strip client authorization and send the real key only to the fixed upstream. Request size bounded. No automatic retries.
+- Support nonstream JSON and streaming SSE transparently; capture final usage once, do not buffer away stream responsiveness. Record attempts even for errors and disconnects; missing billing is unknown, never zero. Parent/child rollups must not be added again.
+- Attempt fields: `attempt_id`, `agent_id` (client `X-AQP-Agent-ID`, default `"unattributed"`), `parent_id` optional, `model`, `status` (HTTP code or null), `error_kind` (`network`, `provider`, `client_disconnect`, `unknown` or null), `input_tokens`, `output_tokens`, `cost_usd` (numbers or null), optional `cached_tokens`, `reasoning_tokens`, `duration_seconds`. Include `usage_complete` bool. Preserve provider request ID when present. Real observed model identity is preferable to requested model where provided.
+- Run cost limit rejects new requests once known cumulative billed cost reaches limit, sets `.limit_reached`. In-flight overshoot is possible and must be documented. Missing usage must not be used to claim a hard spend cap. Network errors and provider 5xx/429 may flag `.infrastructure_failed`; do not classify malformed agent requests as network faults. Events need not block request servicing.
+
+## Verification and boundaries
+
+Workers observe deterministic RED before implementation, then GREEN and refactor; tests use fake subprocesses and local mock HTTP servers only. No paid requests, remote execution, installs, Docker pulls, repository-wide formatters, Git mutations, or scratch in the worktree. Use pytest's external temp paths. Return commands and exact outcomes, known live-proof gaps, `skill_resolution`, and covered S# IDs. Approximately 400 lines per coherent slice is advisory, not a reason to minify or omit tests. Report scratch paths; the parent owns cleanup.

@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+.venv/
+.aqp-bench/
+build/
+dist/
+.coverage
+.atl/
+benchmarks/artifacts/
+INIT.md
+artifacts/
