@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "models": ["deepseek/deepseek-v4-flash-0731"],
+  "agents": [{
+    "id": "pi-gentle",
+    "kind": "pi",
+    "command": ["gentle-shell", "--link"]
+  }],
+  "tasks": [{
+    "id": "devops-docker-size",
+    "prompt": "The container image built from this repository's Dockerfile is too large. reports/layers-report.txt is a size report of the current image (docker image ls, docker history, and the size of each path copied into the image). Use it to reduce the image size by editing the Dockerfile and adding a .dockerignore. Requirements:\n- The final image must be based on python:3.11-slim.\n- Exclude from the build context everything the report shows is copied into the image but not needed to run the service.\n- The final image must not contain system build tools or utilities the service does not need at runtime, nor development-only Python dependencies.\n- Do not leave package manager caches (pip, apt) in the final image.\n- Keep the runtime contract unchanged: the same CMD, EXPOSE 8000, and no ENTRYPOINT.\n- Do not modify the application code (app/), the requirements files, or the tests.\nDocker is not available in this environment, so you cannot build the image; reason from the report and the files.",
+    "image": "aqp-agentsbench/pi-gentle-python:0.1.0",
+    "repository": {
+      "source": "https://github.com/gtorres777/docker-optimize-demo.git",
+      "revision": "32ee5550a26daa5b0c47a2fa4074a1ec82ad3dec"
+    },
+    "attachments": [{"source": "layers-report.txt", "target": "reports/layers-report.txt"}],
+    "evaluation": {
+      "files": [{"source": "check.py", "target": "check.py"}],
+      "tests": [
+        {"id": "dummy-workspace-visible", "score": 1, "command": ["python", "/evaluation/check.py"]}
+      ]
+    }
+  }]
+}
