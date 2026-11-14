@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -152,11 +151,24 @@ func (r *DockerRuntime) Start(ctx context.Context, image, workspace string, opti
 	}
 	if home != "" {
 		stage := "/tmp/aqp-stage-" + newID()
+		user := fmt.Sprintf("%d:%d", uid, gid)
+		created, err := r.ExecAs(ctx, identity, user, []string{"mkdir", "-p", stage}, 10*time.Second)
+		if err != nil || created.ReturnCode != 0 {
+			_ = r.discard(context.Background(), identity)
+			if err != nil {
+				return "", fmt.Errorf("create container home staging directory: %w", err)
+			}
+			detail := strings.TrimSpace(created.Stdout + " " + created.Stderr)
+			if detail == "" {
+				detail = "mkdir command failed"
+			}
+			return "", fmt.Errorf("create container home staging directory (exit code %d): %s", created.ReturnCode, detail)
+		}
 		if err := r.dockerCopyDirectory(ctx, identity, home, stage, "", false); err != nil {
 			_ = r.discard(context.Background(), identity)
 			return "", fmt.Errorf("stage container home: %w", err)
 		}
-		transfer, err := r.ExecAs(ctx, identity, fmt.Sprintf("%d:%d", uid, gid), []string{"sh", "-c", `cp -a "$1"/. "$2"/ || exit $?; rm -rf "$1"`, "aqp-stage", stage, "/home/agent"}, 30*time.Second)
+		transfer, err := r.ExecAs(ctx, identity, user, []string{"sh", "-c", `cp -a "$1"/. "$2"/ || exit $?; rm -rf "$1"`, "aqp-stage", stage, "/home/agent"}, 30*time.Second)
 		if err != nil || transfer.ReturnCode != 0 {
 			_ = r.discard(context.Background(), identity)
 			detail := strings.TrimSpace(transfer.Stdout + " " + transfer.Stderr)
@@ -417,6 +429,25 @@ func (r *DockerRuntime) ExecAs(ctx context.Context, identity, user string, comma
 }
 
 func (r *DockerRuntime) exec(ctx context.Context, identity, user string, command []string, timeout time.Duration) (ExecResult, error) {
+	wrapped, pidFile := dockerExecCommand(command)
+	return r.execCommand(ctx, identity, user, wrapped, timeout, pidFile)
+}
+
+func (r *DockerRuntime) execRaw(ctx context.Context, identity, user string, command []string, timeout time.Duration) (ExecResult, error) {
+	return r.execCommand(ctx, identity, user, command, timeout, "")
+}
+
+func dockerExecCommand(command []string) ([]string, string) {
+	pidFile := "/tmp/.aqp-exec-" + newID()
+	wrapped := []string{"sh", "-c", `umask 077
+pid_file=$1
+shift
+printf '%s\n' "$$" > "$pid_file" || exit 125
+exec "$@"`, "aqp-exec", pidFile}
+	return append(wrapped, command...), pidFile
+}
+
+func (r *DockerRuntime) execCommand(ctx context.Context, identity, user string, command []string, timeout time.Duration, pidFile string) (ExecResult, error) {
 	if err := dockerValidate(identity, command); err != nil {
 		return ExecResult{}, err
 	}
@@ -439,20 +470,61 @@ func (r *DockerRuntime) exec(ctx context.Context, identity, user string, command
 	}
 	attached, err := r.client.ExecAttach(ctx, execID.ID, client.ExecAttachOptions{TTY: false})
 	if err != nil {
-		r.terminateExec(identity, execID.ID, "TERM")
+		_ = r.terminateExec(identity, execID.ID, pidFile, user, "TERM")
 		return ExecResult{}, fmt.Errorf("Docker operation exec attach failed: %w", err)
 	}
 	var stdout, stderr bytes.Buffer
-	_, streamErr := stdcopy.StdCopy(&stdout, &stderr, attached.Reader)
+	streamDone := make(chan error, 1)
+	go func() {
+		_, streamErr := stdcopy.StdCopy(&stdout, &stderr, attached.Reader)
+		streamDone <- streamErr
+	}()
+	var streamErr error
+	select {
+	case streamErr = <-streamDone:
+	case <-ctx.Done():
+		terminateErr := r.terminateExec(identity, execID.ID, pidFile, user, "TERM")
+		select {
+		case streamErr = <-streamDone:
+		case <-time.After(time.Second):
+			attached.Close()
+			streamErr = <-streamDone
+		}
+		attached.Close()
+		if terminateErr == nil {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			terminateErr = r.removeExecPIDFile(cleanupCtx, identity, user, pidFile)
+			cleanupCancel()
+		}
+		result := ExecResult{Stdout: stdout.String(), Stderr: stderr.String()}
+		if terminateErr != nil {
+			return result, fmt.Errorf("%w; Docker exec termination failed: %v", ctx.Err(), terminateErr)
+		}
+		return result, ctx.Err()
+	}
 	attached.Close()
 	if streamErr != nil {
-		r.terminateExec(identity, execID.ID, "TERM")
+		if terminateErr := r.terminateExec(identity, execID.ID, pidFile, user, "TERM"); terminateErr == nil {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			_ = r.removeExecPIDFile(cleanupCtx, identity, user, pidFile)
+			cleanupCancel()
+		}
 		return ExecResult{Stdout: stdout.String(), Stderr: stderr.String()}, fmt.Errorf("Docker exec stream failed: %w", streamErr)
 	}
-	inspection, err := r.waitExec(ctx, identity, execID.ID)
+	inspection, err := r.waitExec(ctx, identity, execID.ID, pidFile, user)
 	if err != nil {
-		r.terminateExec(identity, execID.ID, "TERM")
+		if terminateErr := r.terminateExec(identity, execID.ID, pidFile, user, "TERM"); terminateErr == nil {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			_ = r.removeExecPIDFile(cleanupCtx, identity, user, pidFile)
+			cleanupCancel()
+		}
 		return ExecResult{Stdout: stdout.String(), Stderr: stderr.String()}, err
+	}
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	cleanupErr := r.removeExecPIDFile(cleanupCtx, identity, user, pidFile)
+	cleanupCancel()
+	if cleanupErr != nil {
+		return ExecResult{ReturnCode: inspection.ExitCode, Stdout: stdout.String(), Stderr: stderr.String()}, cleanupErr
 	}
 	return ExecResult{ReturnCode: inspection.ExitCode, Stdout: stdout.String(), Stderr: stderr.String()}, nil
 }
@@ -469,7 +541,7 @@ func dockerValidate(identity string, command []string) error {
 	return nil
 }
 
-func (r *DockerRuntime) waitExec(ctx context.Context, identity, execID string) (client.ExecInspectResult, error) {
+func (r *DockerRuntime) waitExec(ctx context.Context, identity, execID, pidFile, user string) (client.ExecInspectResult, error) {
 	for {
 		inspection, err := r.client.ExecInspect(ctx, execID, client.ExecInspectOptions{})
 		if err != nil {
@@ -480,34 +552,102 @@ func (r *DockerRuntime) waitExec(ctx context.Context, identity, execID string) (
 		}
 		select {
 		case <-ctx.Done():
-			r.terminateExec(identity, execID, "TERM")
+			_ = r.terminateExec(identity, execID, pidFile, user, "TERM")
 			return client.ExecInspectResult{}, ctx.Err()
 		case <-time.After(25 * time.Millisecond):
 		}
 	}
 }
 
-func (r *DockerRuntime) terminateExec(identity, execID, signal string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+func (r *DockerRuntime) terminateExec(identity, execID, pidFile, user, signal string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	info, err := r.client.ExecInspect(ctx, execID, client.ExecInspectOptions{})
-	if err != nil || !info.Running || info.PID <= 0 {
-		return
+	if err != nil {
+		return fmt.Errorf("Docker operation exec inspect failed: %w", err)
 	}
-	for _, action := range []string{signal, "KILL"} {
-		command := []string{"sh", "-c", `kill -` + action + ` "$1"`, "aqp-signal", strconv.Itoa(info.PID)}
-		if _, err := r.exec(ctx, identity, "", command, time.Second); err != nil {
-			return
+	if !info.Running {
+		return nil
+	}
+	if pidFile == "" {
+		return fmt.Errorf("Docker exec process PID metadata is unavailable")
+	}
+	if err := r.signalExecPID(ctx, identity, execID, pidFile, user, signal); err != nil {
+		return err
+	}
+	deadline := time.Now().Add(750 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		inspection, err := r.client.ExecInspect(ctx, execID, client.ExecInspectOptions{})
+		if err != nil {
+			return fmt.Errorf("Docker operation exec inspect failed: %w", err)
 		}
-		deadline := time.Now().Add(750 * time.Millisecond)
+		if !inspection.Running {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(25 * time.Millisecond):
+		}
+	}
+	if signal == "TERM" {
+		if err := r.signalExecPID(ctx, identity, execID, pidFile, user, "KILL"); err != nil {
+			return err
+		}
+		deadline = time.Now().Add(750 * time.Millisecond)
 		for time.Now().Before(deadline) {
 			inspection, err := r.client.ExecInspect(ctx, execID, client.ExecInspectOptions{})
-			if err != nil || !inspection.Running {
-				return
+			if err != nil {
+				return fmt.Errorf("Docker operation exec inspect failed: %w", err)
 			}
-			time.Sleep(25 * time.Millisecond)
+			if !inspection.Running {
+				return nil
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(25 * time.Millisecond):
+			}
 		}
 	}
+	return fmt.Errorf("Docker exec process did not stop after %s", signal)
+}
+
+func (r *DockerRuntime) signalExecPID(ctx context.Context, identity, execID, pidFile, user, signal string) error {
+	command := []string{"sh", "-c", `i=0
+while [ ! -s "$1" ] && [ "$i" -lt 80 ]; do sleep 0.01; i=$((i + 1)); done
+[ -s "$1" ] || exit 1
+pid=$(cat "$1") || exit 1
+case "$pid" in ''|0|0*|*[!0-9]*) exit 1 ;; esac
+kill -` + signal + ` "$pid"`, "aqp-signal", pidFile}
+	result, err := r.execRaw(ctx, identity, user, command, 2*time.Second)
+	if err != nil {
+		return fmt.Errorf("signal Docker exec process: %w", err)
+	}
+	if result.ReturnCode != 0 {
+		inspection, inspectErr := r.client.ExecInspect(ctx, execID, client.ExecInspectOptions{})
+		if inspectErr == nil && !inspection.Running {
+			return nil
+		}
+		detail := strings.TrimSpace(result.Stdout + " " + result.Stderr)
+		return fmt.Errorf("signal Docker exec process failed (exit code %d): %s", result.ReturnCode, detail)
+	}
+	return nil
+}
+
+func (r *DockerRuntime) removeExecPIDFile(ctx context.Context, identity, user, pidFile string) error {
+	if pidFile == "" {
+		return nil
+	}
+	result, err := r.execRaw(ctx, identity, user, []string{"rm", "-f", pidFile}, 2*time.Second)
+	if err != nil {
+		return fmt.Errorf("remove Docker exec PID metadata: %w", err)
+	}
+	if result.ReturnCode != 0 {
+		detail := strings.TrimSpace(result.Stdout + " " + result.Stderr)
+		return fmt.Errorf("remove Docker exec PID metadata failed (exit code %d): %s", result.ReturnCode, detail)
+	}
+	return nil
 }
 
 func (r *DockerRuntime) Spawn(ctx context.Context, identity string, command []string, captureStderr bool) (Process, error) {
@@ -523,17 +663,18 @@ func (r *DockerRuntime) Spawn(ctx context.Context, identity string, command []st
 		user = state.execUser
 	}
 	r.mu.Unlock()
-	execID, err := r.client.ExecCreate(ctx, identity, client.ExecCreateOptions{User: user, WorkingDir: "/workspace", Cmd: command,
+	wrappedCommand, pidFile := dockerExecCommand(command)
+	execID, err := r.client.ExecCreate(ctx, identity, client.ExecCreateOptions{User: user, WorkingDir: "/workspace", Cmd: wrappedCommand,
 		AttachStdin: true, AttachStdout: true, AttachStderr: captureStderr, TTY: false})
 	if err != nil {
 		return nil, fmt.Errorf("Docker operation exec create failed: %w", err)
 	}
 	attached, err := r.client.ExecAttach(ctx, execID.ID, client.ExecAttachOptions{TTY: false})
 	if err != nil {
-		r.terminateExec(identity, execID.ID, "TERM")
+		_ = r.terminateExec(identity, execID.ID, pidFile, user, "TERM")
 		return nil, fmt.Errorf("Docker operation exec attach failed: %w", err)
 	}
-	process := newDockerProcess(r, identity, execID.ID, attached, captureStderr, ctx)
+	process := newDockerProcess(r, identity, execID.ID, attached, captureStderr, ctx, pidFile, user)
 	go process.watchCancellation()
 	return process, nil
 }
@@ -542,6 +683,8 @@ type dockerProcess struct {
 	runtime     *DockerRuntime
 	containerID string
 	execID      string
+	pidFile     string
+	execUser    string
 	attached    client.ExecAttachResult
 	stdin       io.WriteCloser
 	stdout      *io.PipeReader
@@ -550,18 +693,19 @@ type dockerProcess struct {
 	doneCh      chan struct{}
 	ctx         context.Context
 	mu          sync.Mutex
+	pidCleanup  sync.Once
 	done        bool
 	code        int
 	waitErr     error
 }
 
-func newDockerProcess(runtime *DockerRuntime, containerID, execID string, attached client.ExecAttachResult, captureStderr bool, ctx context.Context) *dockerProcess {
+func newDockerProcess(runtime *DockerRuntime, containerID, execID string, attached client.ExecAttachResult, captureStderr bool, ctx context.Context, pidFile, execUser string) *dockerProcess {
 	outR, outW := io.Pipe()
 	errR, errW := io.Pipe()
 	if !captureStderr {
 		_ = errW.Close()
 	}
-	p := &dockerProcess{runtime: runtime, containerID: containerID, execID: execID, attached: attached,
+	p := &dockerProcess{runtime: runtime, containerID: containerID, execID: execID, pidFile: pidFile, execUser: execUser, attached: attached,
 		stdin: dockerExecStdin{response: attached}, stdout: outR, stderr: errR, streamDone: make(chan error, 1), doneCh: make(chan struct{}), ctx: ctx}
 	go func() {
 		var dstErr io.Writer = errW
@@ -606,22 +750,38 @@ func (p *dockerProcess) Wait() (int, error) {
 	if p.done {
 		code, err := p.code, p.waitErr
 		p.mu.Unlock()
+		p.cleanupPIDFile()
 		return code, err
 	}
 	p.mu.Unlock()
 	if streamErr, ok := <-p.streamDone; ok && streamErr != nil {
+		if err := p.runtime.terminateExec(p.containerID, p.execID, p.pidFile, p.execUser, "TERM"); err == nil {
+			p.cleanupPIDFile()
+		}
 		p.finish(0, fmt.Errorf("Docker exec stream failed: %w", streamErr))
 		return 0, p.waitErr
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), dockerDefaultExecTimeout)
 	defer cancel()
-	inspection, err := p.runtime.waitExec(ctx, p.containerID, p.execID)
+	inspection, err := p.runtime.waitExec(ctx, p.containerID, p.execID, p.pidFile, p.execUser)
 	if err != nil {
 		p.finish(0, err)
 		return 0, err
 	}
 	p.finish(inspection.ExitCode, nil)
+	p.cleanupPIDFile()
 	return inspection.ExitCode, nil
+}
+
+func (p *dockerProcess) cleanupPIDFile() {
+	if p.pidFile == "" {
+		return
+	}
+	p.pidCleanup.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = p.runtime.removeExecPIDFile(ctx, p.containerID, p.execUser, p.pidFile)
+	})
 }
 
 func (p *dockerProcess) finish(code int, err error) {
@@ -650,6 +810,7 @@ func (p *dockerProcess) Poll() (int, bool) {
 	select {
 	case <-p.streamDone:
 		p.finish(inspection.ExitCode, nil)
+		p.cleanupPIDFile()
 		return inspection.ExitCode, true
 	default:
 		return 0, false
@@ -660,13 +821,10 @@ func (p *dockerProcess) Terminate() error { return p.signal("TERM") }
 func (p *dockerProcess) Kill() error      { return p.signal("KILL") }
 func (p *dockerProcess) signal(signal string) error {
 	if _, done := p.Poll(); done {
+		p.cleanupPIDFile()
 		return nil
 	}
-	p.runtime.terminateExec(p.containerID, p.execID, signal)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	_, err := p.runtime.waitExec(ctx, p.containerID, p.execID)
-	if err != nil {
+	if err := p.runtime.terminateExec(p.containerID, p.execID, p.pidFile, p.execUser, signal); err != nil {
 		return err
 	}
 	_ = p.attached.CloseWrite()
@@ -731,7 +889,7 @@ func (r *DockerRuntime) ExportWorkspace(ctx context.Context, identity, workspace
 	if err != nil {
 		return fmt.Errorf("Docker workspace export failed: %w", err)
 	}
-	err = dockerExtractArchive(archive.Content, exported)
+	err = dockerExtractArchiveWithRoot(archive.Content, exported, path.Base("/workspace"))
 	closeErr := archive.Content.Close()
 	if err != nil {
 		return err
@@ -762,6 +920,10 @@ func (r *DockerRuntime) ExportWorkspace(ctx context.Context, identity, workspace
 }
 
 func dockerExtractArchive(input io.Reader, destination string) error {
+	return dockerExtractArchiveWithRoot(input, destination, "")
+}
+
+func dockerExtractArchiveWithRoot(input io.Reader, destination, stripRoot string) error {
 	r := tar.NewReader(input)
 	root, err := filepath.Abs(destination)
 	if err != nil {
@@ -792,7 +954,16 @@ func dockerExtractArchive(input io.Reader, destination string) error {
 		if err != nil {
 			return fmt.Errorf("read Docker workspace archive: %w", err)
 		}
-		name := filepath.Clean(filepath.FromSlash(header.Name))
+		headerName := filepath.ToSlash(header.Name)
+		rootPrefix := strings.TrimSuffix(filepath.ToSlash(stripRoot), "/")
+		if rootPrefix != "" {
+			if headerName == rootPrefix || headerName == rootPrefix+"/" {
+				continue
+			}
+			headerName = strings.TrimPrefix(headerName, rootPrefix+"/")
+			header.Name = headerName
+		}
+		name := filepath.Clean(filepath.FromSlash(headerName))
 		if name == "." || filepath.IsAbs(name) || name == ".." || strings.HasPrefix(name, ".."+string(os.PathSeparator)) {
 			return fmt.Errorf("unsafe Docker archive path: %s", header.Name)
 		}
@@ -847,7 +1018,11 @@ func dockerExtractArchive(input io.Reader, destination string) error {
 				return err
 			}
 		case tar.TypeLink:
-			link := filepath.Clean(filepath.FromSlash(header.Linkname))
+			linkName := filepath.ToSlash(header.Linkname)
+			if rootPrefix != "" {
+				linkName = strings.TrimPrefix(linkName, rootPrefix+"/")
+			}
+			link := filepath.Clean(filepath.FromSlash(linkName))
 			if filepath.IsAbs(link) || link == ".." || strings.HasPrefix(link, ".."+string(os.PathSeparator)) {
 				return fmt.Errorf("unsafe Docker archive link: %s", header.Linkname)
 			}

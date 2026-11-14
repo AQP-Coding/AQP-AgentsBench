@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -28,6 +29,7 @@ type fakeDockerDaemon struct {
 	mu                sync.Mutex
 	created           map[string]map[string]any
 	execs             map[string]map[string]any
+	stageDirs         map[string]bool
 	execCount         int
 	failProbe         bool
 	copies            [][]dockerTestTarEntry
@@ -49,7 +51,7 @@ type fakeDockerDaemon struct {
 
 func newFakeDockerDaemon(t *testing.T) *fakeDockerDaemon {
 	t.Helper()
-	d := &fakeDockerDaemon{t: t, created: map[string]map[string]any{}, execs: map[string]map[string]any{}, processKilledCh: make(chan struct{})}
+	d := &fakeDockerDaemon{t: t, created: map[string]map[string]any{}, execs: map[string]map[string]any{}, stageDirs: map[string]bool{}, processKilledCh: make(chan struct{})}
 	d.server = httptest.NewServer(http.HandlerFunc(d.serveHTTP))
 	t.Cleanup(d.server.Close)
 	return d
@@ -90,6 +92,14 @@ func (d *fakeDockerDaemon) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPost && path == "/containers/container-id/start":
 		w.WriteHeader(http.StatusNoContent)
 	case r.Method == http.MethodPut && path == "/containers/container-id/archive":
+		destination := r.URL.Query().Get("path")
+		d.mu.Lock()
+		stageExists := d.stageDirs[destination]
+		d.mu.Unlock()
+		if strings.HasPrefix(destination, "/tmp/aqp-stage-") && !stageExists {
+			writeDockerJSON(w, http.StatusNotFound, map[string]any{"message": "Could not find the home staging directory"})
+			return
+		}
 		if d.failCopy {
 			writeDockerJSON(w, http.StatusForbidden, map[string]any{"message": "copy permission denied"})
 			return
@@ -135,13 +145,19 @@ func (d *fakeDockerDaemon) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		d.execCount++
 		id := fmt.Sprintf("exec-%d", d.execCount)
 		d.execs[id] = body
-		if strings.Contains(fmt.Sprint(body["Cmd"]), "kill -") {
-			if !d.processKilled {
-				d.processKilled = true
-				close(d.processKilledCh)
+		command := fmt.Sprint(body["Cmd"])
+		if args, ok := body["Cmd"].([]any); ok {
+			if strings.Contains(command, "mkdir -p /tmp/aqp-stage-") && len(args) > 0 {
+				d.stageDirs[fmt.Sprint(args[len(args)-1])] = true
+			}
+			if len(args) > 3 && fmt.Sprint(args[3]) == "aqp-signal" && strings.Contains(command, "kill -") {
+				if !d.processKilled {
+					d.processKilled = true
+					close(d.processKilledCh)
+				}
 			}
 		}
-		failHome := d.failHomeTransfer && strings.Contains(fmt.Sprint(body["Cmd"]), "aqp-stage")
+		failHome := d.failHomeTransfer && strings.Contains(command, "cp -a") && strings.Contains(command, "aqp-stage")
 		if failHome {
 			d.execs[id]["failed"] = true
 		}
@@ -608,6 +624,33 @@ func TestDockerArchiveExtractionRejectsTraversalAndSymlinkParent(t *testing.T) {
 	}
 }
 
+func TestDockerArchiveExtractionStripsContainerRootAndRejectsTraversal(t *testing.T) {
+	root := t.TempDir()
+	archive := dockerTestTar(t, []dockerTestTarEntry{
+		{name: "workspace/", mode: 0o755, kind: tar.TypeDir},
+		{name: "workspace/created.txt", body: []byte("created"), mode: 0o600, kind: tar.TypeReg},
+		{name: "workspace/nested/", mode: 0o700, kind: tar.TypeDir},
+		{name: "workspace/nested/answer.txt", body: []byte("answer"), mode: 0o640, kind: tar.TypeReg},
+	})
+	if err := dockerExtractArchiveWithRoot(bytes.NewReader(archive), root, "workspace"); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{"created.txt": "created", "nested/answer.txt": "answer"} {
+		got, err := os.ReadFile(filepath.Join(root, name))
+		if err != nil || string(got) != want {
+			t.Fatalf("extracted %s = %q, %v", name, got, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, "workspace")); !os.IsNotExist(err) {
+		t.Fatalf("container archive root was nested in exported workspace: %v", err)
+	}
+
+	unsafe := dockerTestTar(t, []dockerTestTarEntry{{name: "workspace/../outside.txt", body: []byte("bad"), mode: 0o600, kind: tar.TypeReg}})
+	if err := dockerExtractArchiveWithRoot(bytes.NewReader(unsafe), t.TempDir(), "workspace"); err == nil {
+		t.Fatal("root-prefixed traversal archive accepted")
+	}
+}
+
 func TestDockerAddressReadsIPv4FromEngineInspection(t *testing.T) {
 	runtime := newFakeDockerDaemon(t).runtime(t)
 	if got, err := runtime.Address("container-id"); err != nil || got != "172.18.0.2" {
@@ -630,12 +673,16 @@ func TestDockerExecPreservesArgvAndUsesSeparateNonTTYStreams(t *testing.T) {
 	defer d.mu.Unlock()
 	var request map[string]any
 	for _, exec := range d.execs {
-		if fmt.Sprint(exec["Cmd"]) == "[printf x; echo not-a-shell]" {
+		args, _ := exec["Cmd"].([]any)
+		if len(args) >= 6 && fmt.Sprint(args[0]) == "sh" && fmt.Sprint(args[1]) == "-c" && fmt.Sprint(args[3]) == "aqp-exec" && fmt.Sprint(args[len(args)-2:]) == "[printf x; echo not-a-shell]" {
 			request = exec
 		}
 	}
-	if request == nil || request["Tty"] != false || request["WorkingDir"] != "/workspace" || fmt.Sprint(request["Cmd"]) != "[printf x; echo not-a-shell]" {
+	if request == nil || request["Tty"] != false || request["WorkingDir"] != "/workspace" || !strings.Contains(fmt.Sprint(request["Cmd"]), `exec "$@"`) {
 		t.Fatalf("unexpected ExecCreate options: %#v", request)
+	}
+	if got := fmt.Sprint(request["Cmd"].([]any)[len(request["Cmd"].([]any))-2:]); got != "[printf x; echo not-a-shell]" {
+		t.Fatalf("wrapper changed argv: %s", got)
 	}
 }
 
@@ -791,6 +838,19 @@ func TestDockerProcessTerminationTargetsExecNotContainer(t *testing.T) {
 				t.Fatalf("wait after termination = %d, %v", code, err)
 			}
 		})
+	}
+}
+
+func TestDockerExecTimeoutTerminatesOnlyExec(t *testing.T) {
+	d := newFakeDockerDaemon(t)
+	runtime := d.runtime(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	if _, err := runtime.Exec(ctx, "container-id", []string{"agent-long"}, time.Second); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("timed exec error = %v, want context deadline", err)
+	}
+	if d.stopped || !d.processKilled {
+		t.Fatalf("exec timeout affected the container or left exec running: stopped=%v processKilled=%v", d.stopped, d.processKilled)
 	}
 }
 
