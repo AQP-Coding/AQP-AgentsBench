@@ -1,6 +1,7 @@
 package bench
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -164,5 +165,18 @@ func TestManifestErrorKeepsEmptyRequiredList(t *testing.T) {
 	err := checkKeys(Record{"unexpected": true}, []string{"allowed"}, nil)
 	if err == nil || err.Error() != "Expected object with keys ['allowed']; required []" {
 		t.Fatalf("unexpected contract error: %v", err)
+	}
+}
+
+func TestGeneratedIdentifiersKeepUUID4Layout(t *testing.T) {
+	for i := 0; i < 16; i++ {
+		id := newID()
+		b, err := hex.DecodeString(id)
+		if err != nil || len(b) != 16 {
+			t.Fatalf("invalid ID %q", id)
+		}
+		if b[6]&0xf0 != 0x40 || b[8]&0xc0 != 0x80 {
+			t.Fatalf("identifier is not UUID4-compatible: %s", id)
+		}
 	}
 }

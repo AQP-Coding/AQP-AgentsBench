@@ -97,6 +97,9 @@ func newID() string {
 	if _, err := rand.Read(b); err != nil {
 		panic(err)
 	}
+	// Retain the UUID4 hexadecimal layout of existing run and attempt IDs.
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
 	return hex.EncodeToString(b)
 }
 func unixTime() float64 { return float64(time.Now().UnixNano()) / 1e9 }
