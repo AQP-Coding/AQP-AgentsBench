@@ -141,3 +141,21 @@ func TestTimelineCountsActiveUnionAndChildren(t *testing.T) {
 		t.Fatal("accepted non-monotonic event")
 	}
 }
+
+func TestAttemptTotalsPreserveRequestOrder(t *testing.T) {
+	// Python's ordered dict keeps the first position when an attempt is updated.
+	// Retaining that order also avoids randomized floating-point addition in Go.
+	values := []float64{0.1, 0.2, 0.3}
+	expected := 0.0
+	attempts := []Record{}
+	for i, v := range values {
+		expected += v
+		attempts = append(attempts, Record{"attempt_id": string(rune('a' + i)), "agent_id": "main", "cost_usd": v, "input_tokens": 1, "output_tokens": 1})
+	}
+	for i := 0; i < 100; i++ {
+		got := SummarizeAttempts(attempts)
+		if number(got["cost_usd"]) != expected {
+			t.Fatalf("non-reference summation order: got %.17g, want %.17g", number(got["cost_usd"]), expected)
+		}
+	}
+}

@@ -11,6 +11,7 @@ type Timeline struct {
 	clock              func() float64
 	last, active, wait float64
 	agents             map[string]Record
+	order              []string
 }
 
 func NewTimeline(clock func() float64) *Timeline {
@@ -57,6 +58,7 @@ func (t *Timeline) Event(event Record) error {
 	id := defaultText(event, "agent_id", "main")
 	if t.agents[id] == nil {
 		t.agents[id] = Record{"parent_id": event["parent_id"], "state": "ended", "agent_seconds": 0.0, "human_wait_seconds": 0.0}
+		t.order = append(t.order, id)
 	}
 	t.agents[id]["state"] = state
 	return nil
@@ -69,7 +71,8 @@ func (t *Timeline) Snapshot() Record {
 	}
 	agents := Record{}
 	total := 0.0
-	for id, agent := range t.agents {
+	for _, id := range t.order {
+		agent := t.agents[id]
 		agents[id] = cloneRecord(agent)
 		total += number(agent["agent_seconds"])
 	}
@@ -88,12 +91,18 @@ func (t *Timeline) Finish() error {
 }
 func SummarizeAttempts(attempts []Record) Record {
 	unique := map[string]Record{}
+	order := []string{}
 	for _, a := range attempts {
-		unique[text(a["attempt_id"])] = a
+		id := text(a["attempt_id"])
+		if _, exists := unique[id]; !exists {
+			order = append(order, id)
+		}
+		unique[id] = a
 	}
 	values := []Record{}
 	groups := map[string][]Record{}
-	for _, a := range unique {
+	for _, id := range order {
+		a := unique[id]
 		values = append(values, a)
 		id := defaultText(a, "agent_id", "unattributed")
 		groups[id] = append(groups[id], a)

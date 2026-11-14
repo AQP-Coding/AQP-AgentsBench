@@ -100,3 +100,7 @@ yes a feature-branch, don't commit directly on main, you are not allowed to push
 - Reply tests observed missing-API RED then focused GREEN. Evaluator tests observed missing-API RED then focused GREEN and race GREEN; fixtures cover pass/skip/fail, multi-case rejection, mount failure, UID selection, artifact scratch placement, and timeout scoring. No real Docker/provider/benchmark calls ran.
 - T7 is not complete: run orchestration and its native lifecycle tests remain pending. The independently testable evaluator/reply portion is a 528-line coherent code/test slice and can be committed before the concrete runtime units.
 - T4 native assessment also returned `unassessable` for the active untracked inventory; no review was started and the high-risk classification is unchanged. Retry assessment only when the complete feature is tracked.
+
+### L8 — Numeric ordering parity correction
+
+- Found and fixed a migration-caused accounting discrepancy: iterating a Go map randomized the addition order of request costs, whereas Python retains first-insertion order even after an attempt update. A native regression observed RED (`0.59999999999999998` versus the reference-order `0.60000000000000009`) and GREEN after preserving request order. Timeline cumulative-agent summation also retains agent insertion order. This is compatibility work, not a new scoring rule.
