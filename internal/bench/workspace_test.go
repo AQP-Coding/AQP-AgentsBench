@@ -4,11 +4,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func mustOutput(t *testing.T, dir string, args ...string) []byte {
@@ -20,6 +23,38 @@ func mustOutput(t *testing.T, dir string, args ...string) []byte {
 		t.Fatalf("git %v: %v", args, err)
 	}
 	return output
+}
+
+func TestPrepareWorkspaceNeverInvokesAmbientCredentialHelper(t *testing.T) {
+	root := t.TempDir()
+	marker := filepath.Join(root, "helper-invoked")
+	helper := filepath.Join(root, "helper.sh")
+	if err := os.WriteFile(helper, []byte("#!/bin/sh\nprintf invoked > '"+strings.ReplaceAll(marker, "'", "'\\''")+"'\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(root, ".gitconfig")
+	if err := os.WriteFile(config, []byte("[credential]\n    helper = !/bin/sh "+helper+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", root)
+	t.Setenv("GIT_CONFIG_GLOBAL", config)
+	t.Setenv("GIT_TERMINAL_PROMPT", "0")
+	t.Setenv("NO_PROXY", "127.0.0.1")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("WWW-Authenticate", `Basic realm="fixture"`)
+		w.Header().Set("Content-Length", "0")
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := PrepareWorkspace(ctx, Record{"repository": Record{"source": server.URL + "/repo.git", "revision": strings.Repeat("a", 40)}}, filepath.Join(root, "clone"))
+	if err == nil || !strings.Contains(err.Error(), "Git input preparation") {
+		t.Fatalf("unexpected preparation result: %v", err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("unselected credential helper was invoked: %v", err)
+	}
 }
 
 func TestPrepareWorkspacePinsCommittedSnapshotWithoutMutatingSource(t *testing.T) {
