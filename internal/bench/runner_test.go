@@ -303,8 +303,8 @@ func TestRunCampaignLifecycleAndRedaction(t *testing.T) {
 	if !fileExists(filepath.Join(runDir, "workspace", "answer.txt")) || !fileExists(filepath.Join(runDir, "changes.diff")) {
 		t.Fatal("workspace or diff artifact was not retained")
 	}
-	if !(indexLifecycle(runtime.lifecycle, "export:") < indexLifecycle(runtime.lifecycle, "stop:") && indexLifecycle(runtime.lifecycle, "stop:") < indexLifecycle(runtime.lifecycle, "remove:")) {
-		t.Fatalf("runtime lifecycle order was not export, stop, remove: %v", runtime.lifecycle)
+	if !(indexLifecycle(runtime.lifecycle, "stop:") < indexLifecycle(runtime.lifecycle, "export:") && indexLifecycle(runtime.lifecycle, "export:") < indexLifecycle(runtime.lifecycle, "remove:")) {
+		t.Fatalf("runtime lifecycle order was not stop, export, remove: %v", runtime.lifecycle)
 	}
 	if !(indexLifecycle(runtime.lifecycle, "remove:") < indexLifecycle(runtime.lifecycle, "start-evaluation:") && indexLifecycle(runtime.lifecycle, "start-evaluation:") < indexLifecycle(runtime.lifecycle, "close")) {
 		t.Fatalf("evaluation/close lifecycle order changed: %v", runtime.lifecycle)

@@ -26,7 +26,7 @@ SSH sessions, registry logins, or remote daemon credentials.
 | Networking | Normal bridge egress and `host.docker.internal` host-gateway alias |
 | Server | OpenCode listens inside its bridge container, authenticated with an ephemeral password; no published host port |
 | Evaluation | Separate container with a fresh snapshot under the run artifact directory, optional read-only `/workspace`, and trusted read-only `/evaluation` inputs; copy fallback removes write permission and runs tests as a UID distinct from the file owner |
-| Cleanup | Agent workspace is exported before stopping/removing its container; evaluation remains a separate container |
+| Cleanup | Agent container is stopped before exporting its workspace, then removed; evaluation remains a separate container |
 
 `DockerRuntime.Start(ctx, image, workspace, StartOptions)` returns a container identity.
 Generated home staging is copied through the Docker Engine SDK into container tmpfs,
@@ -39,18 +39,18 @@ copied workspace files and directories retain the expected ownership and modes.
 Read-only evaluator inputs are copied from a private host staging tree with write
 bits removed, and evaluator commands run as a distinct unprivileged UID. Copy
 failures are fatal and include both the probe and transfer errors. With
-`copy_back=True`, the caller must invoke `export_workspace(container, workspace)`
-before removal; export copies the complete rootfs workspace into a fresh host
+`StartOptions.CopyBack` enabled, the caller must invoke `Stop(ctx, container)` and
+then `ExportWorkspace(ctx, container, workspace)` before removal; export copies the complete rootfs workspace into a fresh host
 staging directory and replaces the prior tree, preserving deletions and root
 directory metadata.
 The normal bind path remains unchanged. Snapshots are placed under the selected
-artifact directory. `exec(container, argv, timeout=300)` returns a text `CompletedProcess` so
-the caller checks the exit code. `spawn(container, argv)` returns binary stdin/stdout
+artifact directory. `Exec(ctx, container, argv, timeout)` returns an `ExecResult` so
+the caller checks its exit code and error. `Spawn(ctx, container, argv, captureStderr)` returns a `Process` with binary stdin/stdout
 pipes; Pi may opt into a bounded stderr pipe, which is drained concurrently and
 retained up to 64 KiB in startup/EOF diagnostics.
 Before each evaluator test, required files are checked inside the container; missing
 or unreadable mounts are reported as evaluator infrastructure errors, not test failures.
-`address(container)` returns its bridge IPv4 address. `stop`/`remove` tolerate
+`Address(container)` returns its bridge IPv4 address. `Stop`/`Remove` tolerate
 missing containers, but do not suppress daemon failures. Host-to-bridge HTTP
 requires native Linux Docker networking. The tested Docker Desktop/WSL daemon could
 not read workspace files from the WSL filesystem; the runtime detects this with a
@@ -61,13 +61,13 @@ integration check.
 ## Select a harness without inheriting secrets
 
 Both explicit and inherit modes stage the manifest's selected `files` only.
-`harness.stage(files, home)` preserves bytes and directory trees; it rejects
+`StageHarness(files, home)` preserves bytes and directory trees; it rejects
 traversal, symlinks, overlapping targets, credential filenames, recognized private
 keys, and literal credential fields in JSON. It does not infer or copy host
 configuration automatically. Review arbitrary selected text/code yourself:
 secret-pattern checks are not a universal secret detector.
 
-`harness.configure(home, kind, model, gateway_url, token)` preserves unrelated
+`ConfigureHarness(home, kind, model, gatewayURL, token)` preserves unrelated
 settings, instructions, hooks, skills, and plugins. It adds the `aqp` provider and
 returns the **only** explicit environment the caller should pass to the container.
 The local gateway token is an environment reference, never literal configuration;
@@ -79,7 +79,7 @@ and [OpenCode provider configuration](https://opencode.ai/docs/providers/) descr
 these custom-provider APIs. [OpenCode precedence](https://opencode.ai/docs/config/)
 puts runtime inline configuration after project configuration.
 
-Call `harness.validate_workspace(workspace, kind, model)` before execution to
+Call `ValidateWorkspace(workspace, kind, model)` before execution to
 reject known repository-level provider/model overrides. Executable plugins may
 spawn their own clients, acquire credentials, or alter networking; normal outbound
 egress is NOT a forced-routing firewall. Such harness behavior is unsupported and
@@ -96,7 +96,7 @@ that event fail closed when the process exits; configure an agent-time limit to
 bound an older long-lived process. See [Pi RPC](https://raw.githubusercontent.com/badlogic/pi-mono/main/packages/coding-agent/docs/rpc.md).
 
 Pi dialog `ask` metadata contains the complete request. Replies are booleans for
-`confirm`, strings for `select`/`input`/`editor`, or `None` to cancel. Notification
+`confirm`, strings for `select`/`input`/`editor`, or JSON `null` to cancel. Notification
 methods do not count as interventions. Unsupported terminal-only extension widgets
 cannot be preserved through RPC; see [Pi extension UI](https://raw.githubusercontent.com/badlogic/pi-mono/main/packages/coding-agent/docs/rpc-extension-ui.md).
 

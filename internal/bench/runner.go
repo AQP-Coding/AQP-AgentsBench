@@ -388,16 +388,14 @@ func runCampaignTrial(ctx context.Context, spec Record, campaignID string, store
 								}
 								_ = timeline.Finish()
 								var exportErr error
-								if container != "" {
-									if err := runtimeHandle.ExportWorkspace(context.Background(), container, workspace); err != nil {
-										exportErr = err
-										set("infrastructure_incidents", true)
-									}
-								}
 								var cleanupErr error
 								if container != "" {
+									// Quiesce agent writes before copying the final workspace snapshot.
 									if err := runtimeHandle.Stop(context.Background(), container); err != nil {
 										cleanupErr = err
+									} else if err := runtimeHandle.ExportWorkspace(context.Background(), container, workspace); err != nil {
+										exportErr = err
+										set("infrastructure_incidents", true)
 									}
 									if err := runtimeHandle.Remove(context.Background(), container); err != nil && cleanupErr == nil {
 										cleanupErr = err

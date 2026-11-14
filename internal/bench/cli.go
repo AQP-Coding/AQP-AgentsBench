@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -15,6 +16,9 @@ import (
 const cliProgram = "aqp-bench"
 
 var cliCommands = []string{"validate", "run", "demo", "list", "show", "stop", "questions", "answer", "rerun", "dashboard"}
+
+// Match argparse's negative-number positional syntax, not arbitrary dash-prefixed text.
+var cliNegativeNumber = regexp.MustCompile(`^-(?:[0-9]+|[0-9]*\.[0-9]+)$`)
 
 type cliArgs struct {
 	command, artifacts, manifest, runID, requestID, reply string
@@ -105,12 +109,35 @@ func commandHelp(command string) string {
 	}
 }
 
+func canonicalCLIOption(token string, names ...string) string {
+	flag, value, hasValue := strings.Cut(token, "=")
+	if !strings.HasPrefix(flag, "--") || len(flag) <= 2 {
+		return token
+	}
+	match := ""
+	for _, name := range names {
+		if strings.HasPrefix(name, flag) {
+			if match != "" {
+				return token
+			}
+			match = name
+		}
+	}
+	if match == "" {
+		return token
+	}
+	if hasValue {
+		return match + "=" + value
+	}
+	return match
+}
+
 func optionValue(args []string, index *int, name string) (string, error) {
 	token := args[*index]
 	if strings.HasPrefix(token, name+"=") {
 		return strings.TrimPrefix(token, name+"="), nil
 	}
-	if *index+1 >= len(args) || args[*index+1] == "--" || strings.HasPrefix(args[*index+1], "-") {
+	if *index+1 >= len(args) || args[*index+1] == "--" || strings.HasPrefix(args[*index+1], "-") && !cliNegativeNumber.MatchString(args[*index+1]) {
 		return "", fmt.Errorf("argument %s: expected one argument", name)
 	}
 	*index++
@@ -118,13 +145,15 @@ func optionValue(args []string, index *int, name string) (string, error) {
 }
 
 func parseCLIArgs(args []string) (cliArgs, string, error) {
+	args = append([]string(nil), args...)
 	parsed := cliArgs{artifacts: ".aqp-bench", apiKeyEnv: "OPENROUTER_API_KEY", port: 8765}
 	if len(args) == 0 {
 		return parsed, "", &cliParseError{usage: rootUsage(), program: cliProgram, message: "the following arguments are required: command"}
 	}
 	commandIndex := -1
 	for i := 0; i < len(args); i++ {
-		token := args[i]
+		token := canonicalCLIOption(args[i], "--help", "--artifacts")
+		args[i] = token
 		if token == "-h" || token == "--help" {
 			return parsed, rootHelp(), nil
 		}
@@ -155,7 +184,7 @@ func parseCLIArgs(args []string) (cliArgs, string, error) {
 			optionsEnded = true
 			continue
 		}
-		if !optionsEnded && (token == "-h" || token == "--help") {
+		if !optionsEnded && (token == "-h" || canonicalCLIOption(token, "--help") == "--help") {
 			return parsed, commandHelp(parsed.command), nil
 		}
 	}
@@ -167,7 +196,7 @@ func parseCLIArgs(args []string) (cliArgs, string, error) {
 			optionsEnded = true
 			continue
 		}
-		if !optionsEnded && strings.HasPrefix(token, "-") {
+		if !optionsEnded && strings.HasPrefix(token, "-") && !cliNegativeNumber.MatchString(token) {
 			var option string
 			switch parsed.command {
 			case "run", "rerun":
@@ -177,6 +206,8 @@ func parseCLIArgs(args []string) (cliArgs, string, error) {
 			case "dashboard":
 				option = "--port"
 			}
+			token = canonicalCLIOption(token, option)
+			remaining[i] = token
 			if option == "" || token != option && !strings.HasPrefix(token, option+"=") {
 				return parsed, "", &cliParseError{usage: commandUsage(parsed.command), program: cliProgram + " " + parsed.command, message: "unrecognized arguments: " + token}
 			}
@@ -432,32 +463,17 @@ func selectedAPIKey(name string) (string, error) {
 
 func cliPendingQuestions(store *Store, runID string) ([]Record, error) {
 	result := []Record{}
-	runIDs := []string{}
-	if runID != "" {
-		runIDs = append(runIDs, runID)
-	} else {
-		runs, err := store.List()
-		if err != nil {
-			return nil, err
-		}
-		for _, run := range runs {
-			runIDs = append(runIDs, text(run["id"]))
-		}
+	questions, err := store.Questions(runID)
+	if err != nil {
+		return nil, err
 	}
-	for _, id := range runIDs {
-		questions, err := store.Questions(id)
-		if err != nil {
-			return nil, err
-		}
-		if len(questions) == 0 {
-			continue
-		}
-		run, err := store.Get(id)
+	for _, question := range questions {
+		run, err := store.Get(text(question["run_id"]))
 		if err != nil {
 			return nil, err
 		}
 		if run["status"] == "running" {
-			result = append(result, questions...)
+			result = append(result, question)
 		}
 	}
 	return result, nil

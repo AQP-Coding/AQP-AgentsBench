@@ -242,7 +242,13 @@ func (s *Store) Question(runID, question string, metadata Record) (string, error
 }
 
 func (s *Store) Questions(runID string) ([]Record, error) {
-	rows, err := s.db.Query(`SELECT id,run_id,question,metadata FROM questions WHERE answer IS NULL AND run_id=?`, runID)
+	query := `SELECT id,run_id,question,metadata FROM questions WHERE answer IS NULL`
+	args := []any{}
+	if runID != "" {
+		query += ` AND run_id=?`
+		args = append(args, runID)
+	}
+	rows, err := s.db.Query(query+` ORDER BY rowid`, args...)
 	if err != nil {
 		return nil, err
 	}
