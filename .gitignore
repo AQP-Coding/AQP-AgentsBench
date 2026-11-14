@@ -11,3 +11,6 @@ dist/
 benchmarks/artifacts/
 INIT.md
 artifacts/
+bin/
+*.test
+coverage.out

@@ -1,21 +1,23 @@
 # Account for every forwarded model attempt
 
-`aqp_bench.gateway.Gateway` forwards Chat Completions to one fixed OpenRouter
-upstream and records observed token counts and billed cost. It uses Python's
-standard library; tests use only loopback HTTP providers.
+`internal/bench.Gateway` forwards Chat Completions to one fixed OpenRouter
+upstream and records observed token counts and billed cost. It uses Go net/http; gateway tests use only loopback HTTP providers.
 
 ## Quick path
 
-```python
-from aqp_bench.gateway import Gateway
-
-# Resolve the key explicitly in the runner; never persist it in run artifacts.
-with Gateway(explicit_key, cost_limit=1.0) as gateway:
-    base_url = gateway.url  # ends in /v1
-    local_capability = gateway.token
-    # Configure every agent/subagent with this base URL and local capability.
-    # Run the agent here, then stop it before leaving the gateway context.
-    records = gateway.attempts
+```go
+// Inside this module: internal/bench is not a published external Go API.
+limit := 1.0
+gateway, err := bench.NewGateway(explicitKey, bench.GatewayOptions{CostLimit: &limit})
+if err != nil {
+    return err
+}
+defer gateway.Close()
+baseURL := gateway.BaseURL() // ends in /v1
+localCapability := gateway.Token
+// Configure every agent/subagent with this URL and local capability.
+// Stop the agent before closing the gateway.
+records := gateway.Attempts()
 ```
 
 Use `Authorization: Bearer <local capability>` on every request, including model
@@ -23,9 +25,9 @@ discovery. `POST /v1/chat/completions` and `GET /v1/models` are the only routes.
 Queries, absolute request URLs, arbitrary paths, redirects, inherited proxy
 settings, and client authorization forwarding are not supported. The actual key
 is sent only to the configured upstream. No access logs or request prompts are
-stored. Response errors are generic; secrets are redacted from forwarded content
-and recorded identifiers. Only aggregate numeric usage and short identifiers are
-retained. Do not use secrets as agent IDs, parent IDs, or model names.
+stored. Provider error diagnostics are bounded and sanitized; secrets are redacted from forwarded content
+and recorded identifiers. Aggregate numeric usage, short identifiers and bounded
+provider error diagnostics are retained, not request prompts. Do not use secrets as agent IDs, parent IDs, or model names.
 
 For Docker connectivity only, the runner can bind `host="0.0.0.0"` and replace the
 URL host with `host.docker.internal` in container configuration. The capability is
@@ -76,12 +78,13 @@ Streams have no fixed total output limit, so long active generations remain
 responsive. Chunked client request bodies are rejected; clients must send a
 valid Content-Length. Over-capacity connections close without upstream work.
 
-`attempts` returns independent lock-protected JSON-safe snapshots. `on_attempt`
-notifications run on one observer thread with a bounded queue (128); exceptions
+`Attempts()` returns independent lock-protected JSON-safe snapshots. `OnAttempt`
+notifications run on one observer goroutine with a bounded queue (128); exceptions
 are isolated and notifications may be dropped if the observer cannot keep up.
 Snapshots, not notifications, are the authoritative accounting source. Stop
-agents before closing the context; active request workers are daemon threads and
-context exit does not wait for a stalled upstream or callback.
+agents before calling `Close()`. Closing the gateway closes its HTTP server and idle
+upstream connections; a stalled observer callback cannot hold up request servicing
+or gateway closure.
 
 ## Protocol evidence and verification
 
@@ -92,7 +95,7 @@ describes the final usage frame before `[DONE]` and errors within SSE events.
 Current usage parameters are automatic; the gateway does not add deprecated
 usage flags or rewrite agent messages.
 
-Run `PYTHONPATH=. pytest -q -p no:cacheprovider tests/test_gateway.py`.
+Run `go test ./internal/bench -run '^TestGateway'` and the same command with `-race`.
 No paid calls or real OpenRouter integration were used for these checks. Normal
 agent network egress means gateway configuration is not a security boundary
 against an actively malicious agent bypassing it; use trusted adapters and

@@ -20,7 +20,7 @@ SSH sessions, registry logins, or remote daemon credentials.
 
 | Runtime boundary | Behavior |
 |---|---|
-| Workspace | Dedicated host directory bind-mounted at `/workspace` when visible to the daemon; otherwise copied through the Docker CLI and exported before container removal |
+| Workspace | Dedicated host directory bind-mounted at `/workspace` when visible to the daemon; otherwise copied through the Docker Engine archive API and exported before container removal |
 | Configuration | Selected isolated home at `/home/agent`; files are copied into container tmpfs, never bind-mounted from host temp paths |
 | User | Host UID/GID, dropped capabilities, no new privileges |
 | Networking | Normal bridge egress and `host.docker.internal` host-gateway alias |
@@ -28,13 +28,12 @@ SSH sessions, registry logins, or remote daemon credentials.
 | Evaluation | Separate container with a fresh snapshot under the run artifact directory, optional read-only `/workspace`, and trusted read-only `/evaluation` inputs; copy fallback removes write permission and runs tests as a UID distinct from the file owner |
 | Cleanup | Agent workspace is exported before stopping/removing its container; evaluation remains a separate container |
 
-`DockerRuntime.start(image, workspace, *, home=None, environment=None,
-evaluation=None, readonly_workspace=False, copy_back=False)` returns a container identity.
-Generated home staging is copied through the Docker client into container tmpfs,
+`DockerRuntime.Start(ctx, image, workspace, StartOptions)` returns a container identity.
+Generated home staging is copied through the Docker Engine SDK into container tmpfs,
 avoiding a bind mount from host temporary directories. Marker probes verify each
 requested host bind. If a probe fails, the runtime retries once without host binds
 and stages full directory trees into the container root filesystem with
-`docker cp`; Docker does not support direct `docker cp` to or from tmpfs. The
+the Docker Engine archive-copy API; this fallback stages into the container root filesystem rather than tmpfs. The
 fallback container starts as the agent UID with `/tmp` as its initial workdir, so
 copied workspace files and directories retain the expected ownership and modes.
 Read-only evaluator inputs are copied from a private host staging tree with write
@@ -146,10 +145,13 @@ subagent accounting.
 ## Local checks
 
 ```bash
-PYTHONPATH=. pytest -q -p no:cacheprovider tests/test_adapters.py tests/test_docker.py tests/test_harness.py
+go test ./internal/bench -run '^(TestPi|TestOpenCode|TestDocker|TestHarness|TestPrepareWorkspace|TestCopyFiles)'
+go test -race ./internal/bench
+AQP_DOCKER_INTEGRATION=1 go test ./internal/bench -run '^TestDockerIntegration' -count=1
 ```
 
-These checks use fake Docker calls, local Python subprocesses, and a loopback HTTP
-fixture. No agent image, network provider, paid request, or ambient credential is
-used. A user-authorized live smoke test remains required for each selected image,
+Default checks use fake Docker API calls, local process streams, and loopback HTTP
+fixtures. The explicitly enabled Docker integration checks use the prepared image
+and short-lived owned containers. Neither suite launches a real agent, contacts a
+model provider, spends model tokens, or reuses ambient credentials. A user-authorized live smoke test remains required for each selected image,
 agent version, and executable harness combination.

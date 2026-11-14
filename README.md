@@ -2,21 +2,21 @@
 
 Local, outcome-based coding-agent benchmarks for **Linux x86_64**. Run task matrices across Pi, OpenCode, models, harness configurations, and repeated trials. Keep results and workspaces on your machine.
 
-**Status:** initial implementation. Deterministic tests and an offline simulation exercise the platform; real Docker/agent/OpenRouter and Gentle-ai compatibility still need a user-authorized smoke test. Subagent measurements are limited to identities exposed by the agent/harness—missing attribution is never fabricated.
+**Status:** Go engine migration. Deterministic Go tests and an offline simulation exercise the platform; local Docker integration tests are opt-in. Real agent/OpenRouter and Gentle-ai compatibility still need a separately authorized smoke test. The existing web dashboard is retained; a TUI is a separate phase. Subagent measurements are limited to identities exposed by the agent/harness—missing attribution is never fabricated.
 
 ## Quick start: no model key, Docker, or paid calls
 
-Requires Python 3.11 or later. From the repository root:
+Requires Go 1.25 or later. The retained offline Python verifier also requires host Python 3.11 or later. From the repository root:
 
 ```bash
-python -m aqp_bench --artifacts /tmp/aqp-demo demo
-python -m aqp_bench --artifacts /tmp/aqp-demo list
-python -m aqp_bench --artifacts /tmp/aqp-demo dashboard
+go run ./cmd/aqp-bench --artifacts /tmp/aqp-demo demo
+go run ./cmd/aqp-bench --artifacts /tmp/aqp-demo list
+go run ./cmd/aqp-bench --artifacts /tmp/aqp-demo dashboard
 ```
 
 Open `http://127.0.0.1:8765`. The demo reads an original CSV attachment, simulates an agent writing a report, forwards one request to a local mock provider, runs two hidden weighted checks separately, and retains results. It is explicitly marked `simulation: true`; it is **not** evidence that a real coding agent works.
 
-For an installed CLI, use `python -m pip install -e '.[dev]'`, then replace `python -m aqp_bench` with `aqp-bench`. Runtime code uses the Python standard library; pytest is a development dependency.
+For an installed CLI, use `go install ./cmd/aqp-bench`, add your Go binary directory to `PATH`, then replace `go run ./cmd/aqp-bench` with `aqp-bench`. The host engine uses Go, the supported Moby Docker SDK and a pure-Go SQLite driver. Python remains for selected benchmark verifiers/task fixtures, not host engine modules or host engine unit tests. Existing manifests and retained SQLite/JSON/JSONL data keep their formats.
 
 ## Run a real campaign
 
@@ -25,13 +25,13 @@ For an installed CLI, use `python -m pip install -e '.[dev]'`, then replace `pyt
 3. Validate without model calls or Docker:
 
    ```bash
-   python -m aqp_bench validate campaign.json
+   go run ./cmd/aqp-bench validate campaign.json
    ```
 
 4. Supply your OpenRouter key in an explicitly selected environment variable, then launch:
 
    ```bash
-   python -m aqp_bench --artifacts .aqp-bench run campaign.json --api-key-env OPENROUTER_API_KEY
+   go run ./cmd/aqp-bench --artifacts .aqp-bench run campaign.json --api-key-env OPENROUTER_API_KEY
    ```
 
    This command makes real, potentially billable model requests. All main/child model configuration must use the benchmark gateway. The actual OpenRouter key stays on the host; containers get an ephemeral gateway capability. Only local Docker Unix sockets are supported, not remote Docker contexts.
@@ -43,11 +43,11 @@ For an installed CLI, use `python -m pip install -e '.[dev]'`, then replace `pyt
 Keep the campaign terminal running. In another terminal using the same `--artifacts` directory:
 
 ```bash
-python -m aqp_bench questions
-python -m aqp_bench answer RUN_ID REQUEST_ID yes
-python -m aqp_bench stop RUN_ID
-python -m aqp_bench show RUN_ID
-python -m aqp_bench rerun RUN_ID --api-key-env OPENROUTER_API_KEY
+go run ./cmd/aqp-bench questions
+go run ./cmd/aqp-bench answer RUN_ID REQUEST_ID yes
+go run ./cmd/aqp-bench stop RUN_ID
+go run ./cmd/aqp-bench show RUN_ID
+go run ./cmd/aqp-bench rerun RUN_ID --api-key-env OPENROUTER_API_KEY
 ```
 
 Pending requests contain their full question/choice metadata. Pi confirmations accept `yes/no`; Pi text/select dialogs accept text. OpenCode permissions require `once`, `always`, or `reject`; question groups require JSON, for example `'[["First option"], ["Second option"]]'`. Use `null` to cancel a supported dialog. Each accepted human reply counts once, including approvals.
@@ -67,21 +67,23 @@ The artifact directory contains SQLite metadata, immutable selected campaign inp
 ## Architecture and contributing
 
 ```text
-aqp_bench/
-  manifest.py, workspace.py       validated inputs and committed snapshots
-  metrics.py, scoring.py          timing, accounting, weighted evaluation
-  store.py, artifacts.py          local persistence and safe change capture
-  docker.py, harness.py           isolated runtime and selected configuration
-  adapters.py                    Pi RPC and OpenCode HTTP/SSE
-  gateway.py                     authenticated OpenRouter forwarding
-  evaluation.py, runner.py        separate checks and bounded campaigns
-  cli.py, dashboard.py            CLI controls and live read-only monitoring
-  demo.py, example/               explicit offline simulation
-tests/                           deterministic local fixtures
+cmd/aqp-bench/                    installed Go CLI entrypoint
+internal/bench/
+  manifest.go, workspace.go       validated inputs and committed snapshots
+  metrics.go, scoring.go          timing, accounting, weighted evaluation
+  store.go, artifacts.go          compatible persistence and safe change capture
+  docker.go, harness.go           SDK runtime and selected configuration
+  adapters.go                     Pi RPC and OpenCode HTTP/SSE
+  gateway.go                      authenticated OpenRouter forwarding
+  evaluation.go, runner.go        separate checks and bounded campaigns
+  cli.go, dashboard.go            controls and live read-only monitoring
+  demo.go, *_test.go              offline simulation and native engine tests
+aqp_bench/example/                embedded original CSV/Python task fixtures
+benchmarks/                      campaign inputs and Python verifiers
 docs/                            manifest, agent, gateway, security contracts
-odd/tasks/initial-release.md      specification, decisions, and evidence
+odd/tasks/go-engine-migration.md  migration scope, commits, and evidence
 ```
 
-Run `pytest -q` for deterministic checks. Tests use temporary directories and local fixtures; they must not call paid providers, reuse ambient credentials, or launch remote workloads. When changing behavior, add a failing public-boundary test first, then implement and verify. Keep scenario evaluators hidden from agents, validate final observable behavior rather than attempted actions, and keep tests/docs with each behavior change.
+Run `go test ./...`, `go test -race ./...`, and `go vet ./...` for native checks. Opt into local Docker checks with `AQP_DOCKER_INTEGRATION=1 go test ./internal/bench -run '^TestDockerIntegration' -count=1`; prepare the documented image first, since tests do not pull it. These tests create and clean up only their own containers. Tests use temporary directories and local fixtures; they must not call paid providers, reuse ambient credentials, or launch remote workloads. When changing behavior, add a failing public-boundary test first, then implement and verify. Keep scenario evaluators hidden from agents, validate final observable behavior rather than attempted actions, and keep tests/docs with each behavior change.
 
-The [implementation specification](odd/tasks/initial-release.md) records confirmed requirements separately from engineering defaults. [Agent integration](docs/agents.md) documents supported protocol surfaces and attribution gaps; [gateway accounting](docs/gateway.md) documents streaming, failures, and limits. Current local chain branches are recorded in the task log. Publishing, pushes, releases, and license selection remain owner decisions; this implementation does not perform them.
+The [migration specification](odd/tasks/go-engine-migration.md) records the Go/Python boundary and verification; the [original specification](odd/tasks/initial-release.md) remains historical context. [Agent integration](docs/agents.md) documents supported protocol surfaces and attribution gaps; [gateway accounting](docs/gateway.md) documents streaming, failures, and limits. Current local chain branches are recorded in the task log. Publishing, pushes, releases, and license selection remain owner decisions; this implementation does not perform them.
