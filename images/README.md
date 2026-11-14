@@ -1,6 +1,6 @@
 # Benchmark images
 
-Keep each image recipe and its non-Python dependency manifests in `images/<name>/`. Build from the **repository root**, so the recipe can install this project's Python dependencies from `pyproject.toml`. Add future images as sibling directories; do not combine unrelated agent stacks into one image.
+Keep each image recipe and its dependency manifests in `images/<name>/`. Build from the **repository root** using the image-local Python requirements and npm/OS manifests. The Go host engine is built separately and is not installed into task images. Add future images as sibling directories; do not combine unrelated agent stacks into one image.
 
 | Image directory | Local tag | Contents |
 |---|---|---|

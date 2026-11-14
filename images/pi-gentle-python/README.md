@@ -1,18 +1,18 @@
 # Python 3.11 with Pi and Gentle
 
-Build instructions and the local image tag are in the [image catalog](../README.md). The default command follows the requested Python example: install `.[dev]` and run `pytest -p no:tldr -v`. The benchmark replaces that command when it starts an agent container.
+Build instructions and the local image tag are in the [image catalog](../README.md). This is a task/agent image, not the Go host engine's test environment. Its default command checks Python availability; campaign evaluation entries explicitly select their Python/pytest commands. The benchmark replaces the default command when it starts an agent container.
 
 ## Dependency ownership
 
 | Dependencies | Manifest |
 |---|---|
-| Python project and pytest | Repository-root `pyproject.toml`, `[project.optional-dependencies].dev` |
+| Python verifier dependencies, including pytest | Image-local `requirements.txt` |
 | Pi 1.5.0 and gentle-pi 4.5.1 | `package.json` and generated `package-lock.json`; installed with `npm ci` |
 | Gentle-ai binary | The pinned gentle-pi package's integrity-verified private installer; the global `gentle-ai` command links to that same binary |
 | OS tools | `apt-packages.txt` |
 | Python/Node runtimes | Dockerfile base images, on the same Debian Bookworm family |
 
-Python dependencies are not duplicated in Dockerfile `pip install` arguments. Node packages need their native npm manifest rather than a misleading Python requirement. The npm graph is locked, including package integrity; base tags, apt repositories and Python's existing version ranges are not a promise of bit-for-bit reproducible future builds. Pin base digests and Python/apt resolutions if a benchmark campaign requires that stronger guarantee.
+Python verifier dependencies are not duplicated in Dockerfile `pip install` arguments. The Go host engine and its tests are not copied or installed into this image. Node packages need their native npm manifest rather than a misleading Python requirement. The npm graph is locked, including package integrity; base tags, apt repositories and Python's version ranges are not a promise of bit-for-bit reproducible future builds. Pin base digests and Python/apt resolutions if a benchmark campaign requires that stronger guarantee.
 
 ## Select the harness explicitly
 
@@ -47,13 +47,13 @@ docker --host unix:///var/run/docker.sock run --rm --network none \
   -c 'python --version && node --version && pi --version && gentle-ai version && gentle-shell --version'
 ```
 
-These checks make no model calls. A real prompt through OpenRouter remains a separate, explicitly budgeted validation step. The image's default suite uses loopback test fixtures; `--network none` prevents external traffic, not local loopback sockets.
+These checks make no model calls. A real prompt through OpenRouter remains a separate, explicitly budgeted validation step. Run host engine tests with Go; selected verifier commands run separately in this image. `--network none` prevents external traffic, not local loopback sockets.
 
 Offline image checks also passed as UID:GID `12345:12345` with fresh writable
 tmpfs HOME/workspace. On the tested WSL/Docker setup, Docker could not read WSL
 workspace files through a bind mount. The runner now checks workspace visibility
 before launching the agent and reports this directly. Enable Docker Desktop WSL
 file sharing or use a local Linux Docker daemon that can access the repository.
-`/app` is the read-only/root-owned test tree, not the writable agent workspace.
+`/workspace` is the benchmark-managed workspace, not a bundled copy of the host engine's tests.
 
 Primary references: [Pi package](https://registry.npmjs.org/@earendil-works/pi-coding-agent/1.5.0), [Gentle-pi package](https://registry.npmjs.org/gentle-pi/4.5.1), [Gentle-ai Pi integration](https://github.com/Gentleman-Programming/gentle-ai/blob/v4.3.1/docs/pi.md), and [Gentle Shell](https://github.com/Gentleman-Programming/gentle-shell).

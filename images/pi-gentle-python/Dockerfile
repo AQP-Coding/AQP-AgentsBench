@@ -27,13 +27,15 @@ RUN npm ci --omit=dev --no-audit --no-fund \
     && chmod -R a+rX /opt/aqp/agent \
     && npm cache clean --force
 
-WORKDIR /app
-COPY . .
-RUN pip install --no-cache-dir -e '.[dev]'
+# Python dependencies belong to retained task verifiers, not the Go host engine.
+COPY images/pi-gentle-python/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt \
+    && rm /tmp/requirements.txt
 
 RUN groupadd --gid 1000 agent \
     && useradd --uid 1000 --gid agent --create-home --home-dir /home/agent agent
 ENV HOME=/home/agent
 USER agent
 
-CMD ["pytest", "-p", "no:tldr", "-v"]
+WORKDIR /workspace
+CMD ["python", "--version"]
