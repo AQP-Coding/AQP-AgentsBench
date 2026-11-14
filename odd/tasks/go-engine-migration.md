@@ -22,7 +22,7 @@ Acceptance: the Go CLI covers the current `validate`, `run`, `demo`, `list`, `sh
 - [ ] **T5** — S1,S3,S5,S6: implement Go Docker Engine SDK boundary, local socket policy, bind/copy transport and lifecycle with fake-daemon tests; route **delegated**, parallel batch B with T6 over the T1 runtime interface, disjoint runtime surfaces; status **in progress**; commit **pending**; Risk: items 2,4,5 (isolation, process lifecycle and Docker dependency).
 - [ ] **T6** — S1,S3,S5,S6: port Pi/OpenCode protocols, child events and dialogs against the shared runtime boundary with tests; route **delegated**, parallel batch B with T5 using the established interface and mocks, disjoint adapter surfaces; status **in progress**; commit **pending**; Risk: items 2,3,4 (protocol/auth boundaries and asynchronous event ordering).
 - [ ] **T7** — S1,S2,S3,S5,S6: port evaluation and run orchestration, cancellation/budgets, snapshots and cleanup with tests; route **inline** (pure reply/evaluation subunits use completed T1/T3 and the shared Runtime interface independently of batch B; runner wiring waits for B); status **in progress**; commit **pending**; Risk: items 2,3,4 (evaluation isolation, results and lifecycle ordering).
-- [ ] **T8** — S1,S2,S3,S4,S5: wire Go CLI, existing web dashboard and trusted offline demo, with command/output tests; route **inline** after T7; status **pending**; commit **pending**; Risk: items 2,3,4 (control requests, command compatibility and dashboard concurrency).
+- [ ] **T8** — S1,S2,S3,S4,S5: wire Go CLI, existing web dashboard and trusted offline demo, with command/output tests; route **inline** (independent read-only dashboard follows completed store; CLI/demo wiring follows T7); status **in progress**; commit **pending**; Risk: items 2,3,4 (control requests, command compatibility and dashboard concurrency).
 - [ ] **T9** — S1,S2,S3,S4,S5: switch build/image/docs instructions to Go, remove superseded Python host modules/tests/packaging, and complete offline verification; route **inline** cutover plus **delegated independent verifier** for named risks after self-checks; status **pending**; commit **pending**; Risk: items 1,2,3,4,5 (whole-feature data/security/contract/concurrency/delivery parity).
 
 ## Log
@@ -104,3 +104,8 @@ yes a feature-branch, don't commit directly on main, you are not allowed to push
 ### L8 — Numeric ordering parity correction
 
 - Found and fixed a migration-caused accounting discrepancy: iterating a Go map randomized the addition order of request costs, whereas Python retains first-insertion order even after an attempt update. A native regression observed RED (`0.59999999999999998` versus the reference-order `0.60000000000000009`) and GREEN after preserving request order. Timeline cumulative-agent summation also retains agent insertion order. This is compatibility work, not a new scoring rule.
+
+### L9 — Existing dashboard subunit
+
+- Ported the loopback-only monitoring server independently of the runner. The existing HTML/JavaScript assets were copied unchanged into Go-embedded files; no TUI or new UI feature was introduced. Read-only controls, Host validation, no-store/CSP/nosniff headers, live stored runs/events and text-only rendering are retained.
+- Native tests observed missing-API RED then focused and race GREEN. T8 remains incomplete until CLI and offline demo are wired. T7 evaluator/replies are committed in `ba8e903`; numeric-order parity fix is `6832457`.
