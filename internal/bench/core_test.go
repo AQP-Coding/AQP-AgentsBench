@@ -159,3 +159,10 @@ func TestAttemptTotalsPreserveRequestOrder(t *testing.T) {
 		}
 	}
 }
+
+func TestManifestErrorKeepsEmptyRequiredList(t *testing.T) {
+	err := checkKeys(Record{"unexpected": true}, []string{"allowed"}, nil)
+	if err == nil || err.Error() != "Expected object with keys ['allowed']; required []" {
+		t.Fatalf("unexpected contract error: %v", err)
+	}
+}

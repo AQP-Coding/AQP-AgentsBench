@@ -28,6 +28,9 @@ func RelativePath(value string) (string, error) {
 	return clean, nil
 }
 func pythonKeys(v []string) string {
+	if len(v) == 0 {
+		return "[]"
+	}
 	v = append([]string{}, v...)
 	sort.Strings(v)
 	return "['" + strings.Join(v, "', '") + "']"
