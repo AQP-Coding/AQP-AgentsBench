@@ -13,6 +13,7 @@ import (
 	"strings"
 )
 
+// cliProgram keeps usage and error prefixes consistent across command entry points.
 const cliProgram = "aqp-bench"
 
 var cliCommands = []string{"validate", "run", "demo", "list", "show", "stop", "questions", "answer", "rerun", "dashboard"}
@@ -30,6 +31,7 @@ type cliParseError struct {
 	usage, program, message string
 }
 
+// Error returns the diagnostic without usage or program prefixes; CLI adds those.
 func (e *cliParseError) Error() string { return e.message }
 
 func rootUsage() string {
@@ -109,6 +111,8 @@ func commandHelp(command string) string {
 	}
 }
 
+// canonicalCLIOption expands an unambiguous long-option prefix, preserving any
+// =value suffix. Unknown or ambiguous tokens remain unchanged for rejection.
 func canonicalCLIOption(token string, names ...string) string {
 	flag, value, hasValue := strings.Cut(token, "=")
 	if !strings.HasPrefix(flag, "--") || len(flag) <= 2 {
@@ -132,6 +136,8 @@ func canonicalCLIOption(token string, names ...string) string {
 	return match
 }
 
+// optionValue reads either =value or the next argument and advances index when
+// consuming that argument. Negative numbers are values, not option names.
 func optionValue(args []string, index *int, name string) (string, error) {
 	token := args[*index]
 	if strings.HasPrefix(token, name+"=") {
@@ -144,6 +150,8 @@ func optionValue(args []string, index *int, name string) (string, error) {
 	return args[*index], nil
 }
 
+// parseCLIArgs preserves the original CLI option and positional-argument rules
+// without reading credentials, opening storage, or mutating args.
 func parseCLIArgs(args []string) (cliArgs, string, error) {
 	args = append([]string(nil), args...)
 	parsed := cliArgs{artifacts: ".aqp-bench", apiKeyEnv: "OPENROUTER_API_KEY", port: 8765}
@@ -461,6 +469,8 @@ func selectedAPIKey(name string) (string, error) {
 	return value, nil
 }
 
+// cliPendingQuestions filters pending questions to running runs without changing
+// their insertion order. An empty runID includes requests from all runs.
 func cliPendingQuestions(store *Store, runID string) ([]Record, error) {
 	result := []Record{}
 	questions, err := store.Questions(runID)

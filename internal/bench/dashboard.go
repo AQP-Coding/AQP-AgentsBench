@@ -18,11 +18,16 @@ var dashboardHTML string
 //go:embed dashboard.js
 var dashboardScript string
 
+// Dashboard serves read-only monitoring on loopback. Create it with NewDashboard
+// and close it when monitoring ends; the zero value is not a running server.
 type Dashboard struct {
+	// URL is the bound loopback endpoint, including an assigned ephemeral port.
 	URL    string
 	server *http.Server
 }
 
+// NewDashboard starts a GET-only server bound to 127.0.0.1 and validates loopback
+// Host headers. Port zero selects an ephemeral port; the caller owns Close.
 func NewDashboard(store *Store, port int) (*Dashboard, error) {
 	listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 	if err != nil {
@@ -104,6 +109,8 @@ func NewDashboard(store *Store, port int) (*Dashboard, error) {
 	go func() { _ = server.Serve(listener) }()
 	return d, nil
 }
+
+// Close shuts down monitoring, allowing at most five seconds for active requests.
 func (d *Dashboard) Close() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

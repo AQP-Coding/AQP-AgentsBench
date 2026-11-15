@@ -18,11 +18,16 @@ var storeIdentifierPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
 
 // Store keeps run records and operator controls in the existing WAL database.
 type Store struct {
+	// Root is the absolute artifact directory selected by NewStore.
+	// Keep it unchanged so file artifacts and database rows remain paired.
 	Root string
 	db   *sql.DB
 	mu   sync.Mutex
 }
 
+// NewStore resolves root to an absolute artifact directory, creates missing
+// directories, and opens the compatible WAL database. The caller owns Close;
+// an uninitialized Store cannot be used.
 func NewStore(root string) (*Store, error) {
 	absolute, err := filepath.Abs(root)
 	if err != nil {
@@ -56,8 +61,11 @@ func NewStore(root string) (*Store, error) {
 	return store, nil
 }
 
+// Close releases the database without deleting retained runs or artifacts.
 func (s *Store) Close() error { return s.db.Close() }
 
+// RunDir validates id and creates its artifact directory, refusing symlink run paths.
+// It does not require a corresponding database row.
 func (s *Store) RunDir(id string) (string, error) {
 	if !storeIdentifierPattern.MatchString(id) {
 		return "", fmt.Errorf("Invalid run identifier")
@@ -94,6 +102,8 @@ func marshalStoreJSON(value any) (string, error) {
 	return string(encoded), nil
 }
 
+// Save writes result.json and then upserts the run in SQLite without mutating result.
+// The file and database update are ordered, not one atomic transaction.
 func (s *Store) Save(result Record) error {
 	encoded, err := marshalStoreJSON(result)
 	if err != nil {
@@ -126,6 +136,7 @@ func decodeStoreRecord(encoded string) (Record, error) {
 	return result, nil
 }
 
+// Get decodes a retained run or reports an unknown ID; callers receive their own record.
 func (s *Store) Get(id string) (Record, error) {
 	var encoded string
 	err := s.db.QueryRow(`SELECT result FROM runs WHERE id=?`, id).Scan(&encoded)
@@ -138,6 +149,7 @@ func (s *Store) Get(id string) (Record, error) {
 	return decodeStoreRecord(encoded)
 }
 
+// List returns retained runs newest-first in insertion order, not completion-time order.
 func (s *Store) List() ([]Record, error) {
 	rows, err := s.db.Query(`SELECT result FROM runs ORDER BY rowid DESC`)
 	if err != nil {
@@ -159,6 +171,8 @@ func (s *Store) List() ([]Record, error) {
 	return result, rows.Err()
 }
 
+// Event serializes an event to SQLite and transcript.jsonl under the store lock.
+// A timestamp is supplied unless the event explicitly provides one.
 func (s *Store) Event(runID string, event Record) error {
 	encodedRecord := Record{"timestamp": unixTime()}
 	for key, value := range event {
@@ -201,6 +215,7 @@ func (s *Store) Event(runID string, event Record) error {
 	return transaction.Commit()
 }
 
+// Events returns the latest 500 events for a run in chronological insertion order.
 func (s *Store) Events(runID string) ([]Record, error) {
 	rows, err := s.db.Query(`SELECT event FROM events WHERE run_id=? ORDER BY seq DESC LIMIT 500`, runID)
 	if err != nil {
@@ -228,6 +243,8 @@ func (s *Store) Events(runID string) ([]Record, error) {
 	return reversed, nil
 }
 
+// Question queues an unanswered human request with its complete metadata and
+// returns a new request ID. Metadata is persisted, not inferred from question text.
 func (s *Store) Question(runID, question string, metadata Record) (string, error) {
 	encoded, err := marshalStoreJSON(metadata)
 	if err != nil {
@@ -241,6 +258,8 @@ func (s *Store) Question(runID, question string, metadata Record) (string, error
 	return id, nil
 }
 
+// Questions returns pending requests in global insertion order. An empty runID
+// includes all runs; otherwise only that run is selected, regardless of run status.
 func (s *Store) Questions(runID string) ([]Record, error) {
 	query := `SELECT id,run_id,question,metadata FROM questions WHERE answer IS NULL`
 	args := []any{}
@@ -268,6 +287,8 @@ func (s *Store) Questions(runID string) ([]Record, error) {
 	return result, rows.Err()
 }
 
+// Response returns the stored raw reply and reports whether the request exists.
+// An existing unanswered request yields nil, true; a missing request yields nil, false.
 func (s *Store) Response(runID, questionID string) (any, bool, error) {
 	var answer sql.NullString
 	err := s.db.QueryRow(`SELECT answer FROM questions WHERE run_id=? AND id=?`, runID, questionID).Scan(&answer)
@@ -283,6 +304,9 @@ func (s *Store) Response(runID, questionID string) (any, bool, error) {
 	return answer.String, true, nil
 }
 
+// Answer reports whether it atomically stored the first reply to a pending request.
+// Only nonblank strings are accepted, and their bytes are preserved. Callers must
+// validate request-specific reply syntax and run eligibility before calling Answer.
 func (s *Store) Answer(runID, questionID string, answer any) (bool, error) {
 	value, ok := answer.(string)
 	if !ok || strings.TrimSpace(value) == "" {
@@ -296,12 +320,15 @@ func (s *Store) Answer(runID, questionID string, answer any) (bool, error) {
 	return changed == 1, err
 }
 
+// Interventions returns the number of answered requests, not the number queued.
 func (s *Store) Interventions(runID string) (int, error) {
 	var count int
 	err := s.db.QueryRow(`SELECT COUNT(*) FROM questions WHERE run_id=? AND answer IS NOT NULL`, runID).Scan(&count)
 	return count, err
 }
 
+// Stop records an idempotent stop-request marker for a retained run. It does not
+// terminate the agent directly or cancel the subsequent evaluator.
 func (s *Store) Stop(runID string) error {
 	if _, err := s.Get(runID); err != nil {
 		return err
@@ -317,6 +344,8 @@ func (s *Store) Stop(runID string) error {
 	return file.Close()
 }
 
+// StopRequested reports whether the stop marker exists. Checking a valid ID
+// creates its artifact directory even when no run row exists.
 func (s *Store) StopRequested(runID string) (bool, error) {
 	runDir, err := s.RunDir(runID)
 	if err != nil {

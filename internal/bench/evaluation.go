@@ -104,6 +104,11 @@ func pytestCaseStatus(report string) (string, error) {
 	return status, nil
 }
 
+// Evaluate scores trusted test commands in separate evaluator containers using
+// a private workspace snapshot and separately staged hidden files. The agent must
+// already be stopped. Each runnable test gets its own container; unreadable required mounts
+// are infrastructure errors, not failing assertions. Temporary snapshots are removed
+// on return, while results retain per-test output and scoring.
 func Evaluate(ctx context.Context, runtime Runtime, workspace string, definition Record, scratchParent string) (Record, error) {
 	root, err := os.MkdirTemp(scratchParent, "aqp-evaluate-")
 	if err != nil {

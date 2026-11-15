@@ -1,3 +1,5 @@
+// Aqp-bench runs local coding-agent benchmarks and read-only monitoring.
+// Provider-backed runs require explicit credentials; demo is an offline simulation.
 package main
 
 import (

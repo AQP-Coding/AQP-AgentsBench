@@ -22,7 +22,10 @@ import (
 	"github.com/AQP-Coding/AQP-AgentsBench/aqp_bench/example"
 )
 
+// demoAPIKey is a deliberately non-secret credential used only with the mock provider.
 const demoAPIKey = "offline-demo-not-a-real-key"
+
+// demoWarning labels persisted simulation results so they are not agent-compatibility evidence.
 const demoWarning = "Offline simulation: no Docker, real agent, harness, or paid provider was exercised."
 
 type demoContainer struct {
@@ -47,6 +50,8 @@ func newDemoRuntime() (*demoRuntime, error) {
 	return &demoRuntime{containers: map[string]demoContainer{}, python: python}, nil
 }
 
+// Start registers a simulated container after checking ctx; image is ignored.
+// Workspace and options are retained for the trusted fixture, not mounted by Docker.
 func (r *demoRuntime) Start(ctx context.Context, _ string, workspace string, options StartOptions) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -59,6 +64,8 @@ func (r *demoRuntime) Start(ctx context.Context, _ string, workspace string, opt
 	return id, nil
 }
 
+// Exec accepts only the trusted fixture verifier and its preflight commands.
+// It never grants general host command execution to a campaign.
 func (r *demoRuntime) Exec(ctx context.Context, id string, command []string, _ time.Duration) (ExecResult, error) {
 	r.mu.Lock()
 	container, exists := r.containers[id]
@@ -109,22 +116,29 @@ func (r *demoRuntime) Exec(ctx context.Context, id string, command []string, _ t
 	return ExecResult{}, fmt.Errorf("run embedded demo checker: %w", err)
 }
 
+// ExecAs uses the same trusted host execution as Exec; user isolation is not
+// provided by the offline simulator.
 func (r *demoRuntime) ExecAs(ctx context.Context, id, _ string, command []string, timeout time.Duration) (ExecResult, error) {
 	return r.Exec(ctx, id, command, timeout)
 }
 
+// Spawn rejects process launching because the offline fixture does not run an agent.
 func (r *demoRuntime) Spawn(context.Context, string, []string, bool) (Process, error) {
 	return nil, errors.New("Offline demo does not spawn agent processes")
 }
 
+// Address rejects network address discovery because no container exists.
 func (r *demoRuntime) Address(string) (string, error) {
 	return "", errors.New("Offline demo has no container network address")
 }
 
+// TransportFor returns bind semantics because the trusted fixture shares host files.
 func (r *demoRuntime) TransportFor(string) string { return "bind" }
 
+// ExportWorkspace needs no copy-back because the trusted fixture already uses host files.
 func (r *demoRuntime) ExportWorkspace(context.Context, string, string) error { return nil }
 
+// Stop ends the simulated container lifecycle without contacting Docker.
 func (r *demoRuntime) Stop(ctx context.Context, id string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -137,6 +151,7 @@ func (r *demoRuntime) Stop(ctx context.Context, id string) error {
 	return nil
 }
 
+// Remove releases the simulated container record without deleting its workspace.
 func (r *demoRuntime) Remove(ctx context.Context, id string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -155,6 +170,8 @@ type demoAdapter struct {
 	container string
 }
 
+// Run derives the fixed report through the loopback mock gateway and emits
+// simulated lifecycle events. Unlike real adapters, it requires a non-nil onEvent.
 func (a *demoAdapter) Run(ctx context.Context, _ string, model string, onEvent EventHandler, _ AskHandler) error {
 	a.runtime.mu.Lock()
 	container, exists := a.runtime.containers[a.container]
@@ -352,6 +369,7 @@ func RunDemo(ctx context.Context, store *Store) (Record, error) {
 
 type demoRejectAdapter struct{ message string }
 
+// Run rejects an unsupported demo adapter instead of launching a real agent.
 func (a demoRejectAdapter) Run(context.Context, string, string, EventHandler, AskHandler) error {
 	return errors.New(a.message)
 }

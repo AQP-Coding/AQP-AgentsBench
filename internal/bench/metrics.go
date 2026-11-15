@@ -6,6 +6,10 @@ import (
 	"time"
 )
 
+// Timeline accounts for wall-clock active and human-wait intervals across agents.
+// State and calls to its clock are serialized. Overall active time wins over wait
+// time when agents overlap; cumulative per-agent time may exceed wall time.
+// Create a Timeline with NewTimeline rather than using its zero value.
 type Timeline struct {
 	mu                 sync.Mutex
 	clock              func() float64
@@ -14,6 +18,8 @@ type Timeline struct {
 	order              []string
 }
 
+// NewTimeline starts accounting at the current clock value. The supplied clock
+// measures seconds and must not move backward.
 func NewTimeline(clock func() float64) *Timeline {
 	if clock == nil {
 		start := time.Now()
@@ -45,6 +51,9 @@ func (t *Timeline) tick(now float64) error {
 	t.last = now
 	return nil
 }
+
+// Event accounts for the elapsed interval before applying a recognized lifecycle
+// transition. Unknown event types are ignored; backward clock movement is an error.
 func (t *Timeline) Event(event Record) error {
 	state, ok := map[string]string{"agent_start": "active", "agent_resume": "active", "agent_wait": "waiting", "agent_end": "ended"}[text(event["type"])]
 	if !ok {
@@ -63,6 +72,9 @@ func (t *Timeline) Event(event Record) error {
 	t.agents[id]["state"] = state
 	return nil
 }
+
+// Snapshot accounts through the current clock value and returns overall and
+// per-agent timing. A backward clock produces a record containing an error.
 func (t *Timeline) Snapshot() Record {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -78,6 +90,8 @@ func (t *Timeline) Snapshot() Record {
 	}
 	return Record{"agent_seconds": t.active, "human_wait_seconds": t.wait, "cumulative_agent_seconds": total, "agents": agents}
 }
+
+// Finish accounts for the last interval and marks all known agents ended.
 func (t *Timeline) Finish() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -89,6 +103,11 @@ func (t *Timeline) Finish() error {
 	}
 	return nil
 }
+
+// SummarizeAttempts deduplicates by attempt_id, retaining the last value in
+// first-seen order so floating-point totals remain reproducible. Missing IDs
+// collide; missing attribution becomes unattributed. Unknown usage stays distinct
+// from known zero, with known subtotals retained alongside completeness flags.
 func SummarizeAttempts(attempts []Record) Record {
 	unique := map[string]Record{}
 	order := []string{}

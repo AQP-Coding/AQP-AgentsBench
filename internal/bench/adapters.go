@@ -20,18 +20,28 @@ import (
 )
 
 const (
+	// adapterPiStderrLimit caps startup and premature-EOF diagnostics.
 	adapterPiStderrLimit = 64 * 1024
+	// adapterPiRecordLimit bounds one Pi JSONL record, not the full stream.
 	adapterPiRecordLimit = 8 * 1024 * 1024
-	adapterOCBodyLimit   = 8 * 1024 * 1024
+	// adapterOCBodyLimit bounds a single OpenCode HTTP response body.
+	adapterOCBodyLimit = 8 * 1024 * 1024
+	// adapterOCDefaultPort is the authenticated server port inside the container;
+	// it is not published on a host interface.
 	adapterOCDefaultPort = 4096
 )
 
+// PiAdapter translates Pi RPC into benchmark lifecycle events and human requests.
+// Prompt acceptance and agent_end are not completion; agent_settled or an explicit
+// handled disposition is required.
 type PiAdapter struct {
 	runtime   Runtime
 	container string
 	command   []string
 }
 
+// NewPiAdapter binds Pi RPC to an existing container and copies command.
+// An empty command selects pi; Run owns the resulting process, not the runtime.
 func NewPiAdapter(runtime Runtime, container string, command []string) *PiAdapter {
 	if len(command) == 0 {
 		command = []string{"pi"}
@@ -39,6 +49,10 @@ func NewPiAdapter(runtime Runtime, container string, command []string) *PiAdapte
 	return &PiAdapter{runtime: runtime, container: container, command: append([]string(nil), command...)}
 }
 
+// Run drives one Pi prompt until settlement, a handled disposition, or an error.
+// A nil context uses context.Background; cancellation cleans up and returns nil.
+// Events are delivered synchronously; ask must honor its context so pending dialogs
+// can finish before Run returns. A nil ask fails only when a dialog is received.
 func (a *PiAdapter) Run(ctx context.Context, prompt, model string, onEvent EventHandler, ask AskHandler) (runErr error) {
 	ctx = adapterContext(ctx)
 	argv := append(append([]string(nil), a.command...), "--mode", "rpc", "--no-session", "--provider", "aqp", "--model", model)
@@ -216,6 +230,8 @@ func (a *PiAdapter) handlePiRecord(record Record, onEvent EventHandler, dialogs 
 	return nil
 }
 
+// OpenCodeAdapter bridges an authenticated OpenCode v1.2 HTTP/SSE session to
+// benchmark events. Requests use an ephemeral password rather than ambient credentials.
 type OpenCodeAdapter struct {
 	runtime     Runtime
 	container   string
@@ -225,6 +241,8 @@ type OpenCodeAdapter struct {
 	port        int
 }
 
+// NewOpenCodeAdapter binds a session to an existing container and copies command.
+// An empty command selects opencode; the server stays on the container network.
 func NewOpenCodeAdapter(runtime Runtime, container string, command []string) *OpenCodeAdapter {
 	if len(command) == 0 {
 		command = []string{"opencode"}
@@ -233,6 +251,10 @@ func NewOpenCodeAdapter(runtime Runtime, container string, command []string) *Op
 	return &OpenCodeAdapter{runtime: runtime, container: container, command: append([]string(nil), command...), password: password, passwordErr: err, port: adapterOCDefaultPort}
 }
 
+// Run starts the authenticated server, subscribes to events, and submits one prompt.
+// It waits for pending dialog callbacks before returning. A nil context uses
+// context.Background; cancellation cleans up and returns nil. Event callbacks are
+// synchronous, and ask must honor its context; a nil ask fails on a dialog.
 func (a *OpenCodeAdapter) Run(ctx context.Context, prompt, model string, onEvent EventHandler, ask AskHandler) (runErr error) {
 	ctx = adapterContext(ctx)
 	if a.passwordErr != nil {

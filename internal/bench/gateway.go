@@ -25,21 +25,35 @@ import (
 )
 
 const (
-	maxGatewayRequest       = 8 * 1024 * 1024
-	maxGatewayResponse      = 16 * 1024 * 1024
-	maxGatewayErrorBody     = 4096
-	maxGatewaySSEFrame      = 1024 * 1024
-	maxGatewayConnections   = 32
+	// maxGatewayRequest bounds client JSON before it can reach the provider.
+	maxGatewayRequest = 8 * 1024 * 1024
+	// maxGatewayResponse bounds nonstreaming provider JSON retained for forwarding and usage.
+	maxGatewayResponse = 16 * 1024 * 1024
+	// maxGatewayErrorBody bounds redacted diagnostics surfaced to clients and artifacts.
+	maxGatewayErrorBody = 4096
+	// maxGatewaySSEFrame bounds one event without buffering the complete SSE stream.
+	maxGatewaySSEFrame = 1024 * 1024
+	// maxGatewayConnections caps active sockets; excess connections are closed, not queued.
+	maxGatewayConnections = 32
+	// maxGatewayNotifications bounds best-effort observer delivery without blocking requests.
 	maxGatewayNotifications = 128
-	gatewayIdleTimeout      = 30 * time.Second
+	// gatewayIdleTimeout bounds inactivity, not the total lifetime of a streaming response.
+	gatewayIdleTimeout = 30 * time.Second
 )
 
 // GatewayOptions configures one run-scoped, fixed-upstream model proxy.
 type GatewayOptions struct {
-	Host      string
-	Port      int
-	Upstream  string
+	// Host is the listen address; empty selects loopback.
+	Host string
+	// Port is the listen port; zero requests an ephemeral port.
+	Port int
+	// Upstream is fixed for the gateway lifetime; empty selects OpenRouter.
+	Upstream string
+	// OnAttempt observes accounting updates through a bounded, best-effort queue.
+	// Nil disables notifications; slow callbacks never block model forwarding.
 	OnAttempt func(Record)
+	// CostLimit caps admission using known billed cost. Nil disables the limit;
+	// zero rejects requests immediately. In-flight requests may overshoot it.
 	CostLimit *float64
 }
 
@@ -47,6 +61,7 @@ type GatewayOptions struct {
 // accounting for submitted completions. Token is a local bearer capability;
 // the provider API key is never made available to clients of the gateway.
 type Gateway struct {
+	// Token authenticates local clients, not upstream requests. Treat it as read-only.
 	Token string
 
 	apiKey        string
@@ -211,13 +226,15 @@ func (g *Gateway) Attempts() []Record {
 // best-effort spend limit. Unknown billing is not treated as zero cost.
 func (g *Gateway) LimitReached() bool { return g.limit.Load() }
 
-// InfrastructureFailed reports provider transport or infrastructure errors.
+// InfrastructureFailed reports whether provider transport or infrastructure errors occurred.
 func (g *Gateway) InfrastructureFailed() bool { return g.infrastr.Load() }
 
-// NotificationsDropped counts best-effort observer callbacks dropped because
+// NotificationsDropped returns the number of observer callbacks dropped because
 // the bounded notification queue was full.
 func (g *Gateway) NotificationsDropped() int { return int(g.dropped.Load()) }
 
+// ServeHTTP checks the run capability and accepts only fixed-upstream model routes.
+// Client credentials, arbitrary targets, and unsupported query parameters are not forwarded.
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	values := r.Header.Values("Authorization")
 	want := []byte("Bearer " + g.Token)
@@ -768,11 +785,14 @@ type idleTimeoutConn struct {
 	timeout time.Duration
 }
 
+// Read refreshes the idle read deadline so progress, rather than total stream duration,
+// determines when a slow connection times out.
 func (c idleTimeoutConn) Read(data []byte) (int, error) {
 	_ = c.Conn.SetReadDeadline(time.Now().Add(c.timeout))
 	return c.Conn.Read(data)
 }
 
+// Write refreshes the idle write deadline before forwarding bytes.
 func (c idleTimeoutConn) Write(data []byte) (int, error) {
 	_ = c.Conn.SetWriteDeadline(time.Now().Add(c.timeout))
 	return c.Conn.Write(data)
@@ -783,6 +803,8 @@ type limitedListener struct {
 	slots chan struct{}
 }
 
+// Accept admits connections while slots are available and closes excess sockets
+// instead of blocking request-serving goroutines on a slot.
 func (l *limitedListener) Accept() (net.Conn, error) {
 	for {
 		conn, err := l.Listener.Accept()
@@ -804,6 +826,7 @@ type limitedConn struct {
 	once    sync.Once
 }
 
+// Close closes the connection and releases its admission slot exactly once.
 func (c *limitedConn) Close() error {
 	err := c.Conn.Close()
 	c.once.Do(c.release)

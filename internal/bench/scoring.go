@@ -2,6 +2,9 @@ package bench
 
 import "fmt"
 
+// ScoreTests joins outcomes to declared test IDs; duplicate or unknown outcome IDs
+// are errors and omitted outcomes become not_run. Only passed tests earn their full
+// weight. Percentages are nil when their denominator is zero.
 func ScoreTests(tests, outcomes []Record) (Record, error) {
 	allowed := map[string]bool{}
 	for _, t := range tests {
@@ -45,6 +48,9 @@ func ScoreTests(tests, outcomes []Record) (Record, error) {
 	}
 	return r, nil
 }
+
+// Aggregate averages available scores from completed, agent_failed, and incomplete
+// runs. Infrastructure and integration failures do not enter the score average.
 func Aggregate(runs []Record) Record {
 	count := 0
 	sum := 0.0
