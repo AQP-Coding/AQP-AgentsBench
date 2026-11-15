@@ -1,7 +1,9 @@
 # Account for every forwarded model attempt
 
 `internal/bench.Gateway` forwards Chat Completions to one fixed OpenRouter
-upstream and records observed token counts and billed cost. It uses Go net/http; gateway tests use only loopback HTTP providers.
+upstream and records observed token counts and billed cost. It uses Go net/http;
+unit tests use loopback providers, and the opt-in Docker probe reaches the actual
+Go gateway from a container while keeping the upstream local and mocked.
 
 ## Quick path
 
@@ -30,8 +32,12 @@ and recorded identifiers. Aggregate numeric usage, short identifiers and bounded
 provider error diagnostics are retained, not request prompts. Do not use secrets as agent IDs, parent IDs, or model names.
 
 For Docker connectivity only, the runner can bind `host="0.0.0.0"` and replace the
-URL host with `host.docker.internal` in container configuration. The capability is
-still mandatory. Restrict network access using host firewall rules; this local
+URL host with `host.docker.internal` in container configuration. Explicit IPv4
+binds use IPv4 sockets: Go's default dual-stack wildcard was not forwarded to
+containers on the tested WSL/Docker Desktop setup. IPv6 literals, mapped IPv6
+addresses and hostnames retain normal TCP resolution. Workspace bind visibility
+is separate; archive-copy fallback does not repair a gateway connection failure.
+The capability is still mandatory. Restrict network access using host firewall rules; this local
 benchmark proxy is not an Internet-facing service. The dashboard stays loopback.
 Upstream HTTPS is required except literal loopback HTTP addresses used by tests.
 
@@ -96,7 +102,18 @@ Current usage parameters are automatic; the gateway does not add deprecated
 usage flags or rewrite agent messages.
 
 Run `go test ./internal/bench -run '^TestGateway'` and the same command with `-race`.
-No paid calls or real OpenRouter integration were used for these checks. Normal
+With the prepared local image and Docker running, verify the container boundary:
+
+```bash
+AQP_DOCKER_INTEGRATION=1 go test ./internal/bench \
+  -run '^TestDockerIntegrationGateway$' -count=1 -timeout=90s -v
+```
+
+The probe runs Node's HTTP client, not an agent: it expects unauthorized access
+to return 401, discovery/completion to return 200, and exactly one accounted mock
+completion. It cleans up only its own containers and never pulls an image.
+An empty completion-attempt list does not exclude discovery traffic or rejection
+before forwarding. No paid calls or real OpenRouter integration were used for these checks. Normal
 agent network egress means gateway configuration is not a security boundary
 against an actively malicious agent bypassing it; use trusted adapters and
 explicit benchmark configuration.

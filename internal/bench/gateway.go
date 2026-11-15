@@ -15,6 +15,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"sort"
 	"strconv"
@@ -43,7 +44,8 @@ const (
 
 // GatewayOptions configures one run-scoped, fixed-upstream model proxy.
 type GatewayOptions struct {
-	// Host is the listen address; empty selects loopback.
+	// Host is the listen address; empty selects loopback. Explicit IPv4 addresses
+	// use IPv4 sockets; IPv6 addresses and hostnames retain normal TCP resolution.
 	Host string
 	// Port is the listen port; zero requests an ephemeral port.
 	Port int
@@ -150,7 +152,12 @@ func NewGateway(apiKey string, options GatewayOptions) (*Gateway, error) {
 	if options.CostLimit != nil && *options.CostLimit == 0 {
 		g.limit.Store(true)
 	}
-	listener, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(options.Port)))
+	network := "tcp"
+	if address, err := netip.ParseAddr(host); err == nil && address.Is4() {
+		// A dual-stack wildcard can bypass Docker Desktop's WSL IPv4 forwarding.
+		network = "tcp4"
+	}
+	listener, err := net.Listen(network, net.JoinHostPort(host, strconv.Itoa(options.Port)))
 	if err != nil {
 		transport.CloseIdleConnections()
 		return nil, fmt.Errorf("listen for gateway: %w", err)
