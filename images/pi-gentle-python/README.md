@@ -51,9 +51,11 @@ These checks make no model calls. A real prompt through OpenRouter remains a sep
 
 Offline image checks also passed as UID:GID `12345:12345` with fresh writable
 tmpfs HOME/workspace. On the tested WSL/Docker setup, Docker could not read WSL
-workspace files through a bind mount. The runner now checks workspace visibility
-before launching the agent and reports this directly. Enable Docker Desktop WSL
-file sharing or use a local Linux Docker daemon that can access the repository.
+workspace files through a bind mount. The runner checks visibility before starting
+the agent and falls back to Docker Engine archive copy when necessary, exporting
+the final workspace before removal. File sharing or a daemon with direct access
+can retain the bind path, but is not required to use copy fallback. Filesystem
+visibility and [gateway reachability](../../docs/gateway.md) are separate checks.
 `/workspace` is the benchmark-managed workspace, not a bundled copy of the host engine's tests.
 
 Primary references: [Pi package](https://registry.npmjs.org/@earendil-works/pi-coding-agent/1.5.0), [Gentle-pi package](https://registry.npmjs.org/gentle-pi/4.5.1), [Gentle-ai Pi integration](https://github.com/Gentleman-Programming/gentle-ai/blob/v4.3.1/docs/pi.md), and [Gentle Shell](https://github.com/Gentleman-Programming/gentle-shell).
