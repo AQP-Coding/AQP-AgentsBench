@@ -51,12 +51,16 @@ retained up to 64 KiB in startup/EOF diagnostics.
 Before each evaluator test, required files are checked inside the container; missing
 or unreadable mounts are reported as evaluator infrastructure errors, not test failures.
 `Address(container)` returns its bridge IPv4 address. `Stop`/`Remove` tolerate
-missing containers, but do not suppress daemon failures. Host-to-bridge HTTP
-requires native Linux Docker networking. The tested Docker Desktop/WSL daemon could
-not read workspace files from the WSL filesystem; the runtime detects this with a
-temporary marker and falls back to client-mediated copy. A complete Docker copy
-round-trip is tested locally; provider/model-backed execution remains a separate
-integration check.
+missing containers, but do not suppress daemon failures. Host-to-container bridge
+HTTP (used by OpenCode) requires native Linux Docker networking; the opposite
+container-to-host gateway probe does not verify that route.
+
+Workspace visibility is a separate boundary. The tested Docker Desktop/WSL daemon
+could not read WSL bind-mounted files; a temporary marker detects this and selects
+archive-copy fallback, preserving final workspace changes through export. The
+[gateway probe](gateway.md#protocol-evidence-and-verification) separately verifies
+container-to-host HTTP using an explicit IPv4 listener. Local copy and mocked
+gateway checks do not prove real agent/provider/model compatibility.
 
 ## Select a harness without inheriting secrets
 

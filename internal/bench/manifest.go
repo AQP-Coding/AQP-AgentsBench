@@ -12,6 +12,8 @@ import (
 	"strings"
 )
 
+// RelativePath validates and cleans a POSIX-relative workspace target. Empty,
+// absolute, backslash-containing paths and any .. or .git component are rejected.
 func RelativePath(value string) (string, error) {
 	if value == "" || strings.Contains(value, "\\") {
 		return "", fmt.Errorf("Expected a nonempty relative POSIX path")
@@ -163,6 +165,9 @@ func setDefault(r Record, key string, value any) {
 	}
 }
 
+// LoadCampaign reads and validates a strict version-1 manifest, resolves input
+// paths relative to the manifest, and supplies defaults for omitted optional fields.
+// It does not start Docker, open the artifact store, or make model requests.
 func LoadCampaign(filename string) (Record, error) {
 	filename, err := filepath.Abs(filename)
 	if err != nil {
@@ -341,6 +346,9 @@ func LoadCampaign(filename string) (Record, error) {
 	}
 	return data, nil
 }
+
+// ExpandRuns expands a validated campaign in task, agent, model, harness, then
+// trial order. Record-valued run inputs are cloned so trials do not share mutable definitions.
 func ExpandRuns(c Record) []Record {
 	out := []Record{}
 	for _, task := range records(c["tasks"]) {

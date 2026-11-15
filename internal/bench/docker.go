@@ -23,8 +23,12 @@ import (
 	"github.com/moby/moby/client"
 )
 
+// dockerDefaultExecTimeout bounds Exec calls whose caller supplies no positive timeout.
 const dockerDefaultExecTimeout = 300 * time.Second
 
+// DockerRuntime owns an SDK client and tracks containers created through it.
+// Create it with NewDockerRuntime. Close releases the client, but container Stop
+// and Remove remain the caller's responsibility.
 type DockerRuntime struct {
 	client *client.Client
 	mu     sync.Mutex
@@ -46,6 +50,9 @@ type dockerMount struct {
 	readonly bool
 }
 
+// NewDockerRuntime selects a local Unix socket. DOCKER_HOST can explicitly select
+// a socket; otherwise an available rootless socket is preferred. Remote transports
+// are rejected without probing; ambient contexts and registry credentials are not inherited.
 func NewDockerRuntime() (*DockerRuntime, error) {
 	uid := os.Getuid()
 	defaultHost := "/var/run/docker.sock"
@@ -71,6 +78,7 @@ func newDockerRuntimeWithClient(c *client.Client) *DockerRuntime {
 	return &DockerRuntime{client: c, state: map[string]*dockerContainerState{}}
 }
 
+// Close releases the Docker client without stopping or removing owned containers.
 func (r *DockerRuntime) Close() error {
 	if r == nil || r.client == nil {
 		return nil
@@ -78,6 +86,9 @@ func (r *DockerRuntime) Close() error {
 	return r.client.Close()
 }
 
+// Start creates a container from an already-local image with an isolated home
+// and the invoking UID/GID. It probes requested binds and falls back to archive
+// copy when they are not visible; it never pulls an image or mounts the host HOME.
 func (r *DockerRuntime) Start(ctx context.Context, image, workspace string, options StartOptions) (string, error) {
 	if r == nil || r.client == nil {
 		return "", fmt.Errorf("Docker Engine client is unavailable")
@@ -408,6 +419,8 @@ func dockerWriteTarDirectory(source, root string, readonly bool, out io.Writer) 
 	return nil
 }
 
+// TransportFor returns the selected bind or copy transport for identity.
+// An unknown identity returns an empty string.
 func (r *DockerRuntime) TransportFor(identity string) string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -417,10 +430,15 @@ func (r *DockerRuntime) TransportFor(identity string) string {
 	return ""
 }
 
+// Exec runs literal argv with separate stdout/stderr and no PTY. Nonpositive
+// timeout selects the default limit; a nonzero command exit is recorded in
+// ExecResult rather than treated as a transport error.
 func (r *DockerRuntime) Exec(ctx context.Context, identity string, command []string, timeout time.Duration) (ExecResult, error) {
 	return r.exec(ctx, identity, "", command, timeout)
 }
 
+// ExecAs applies Exec semantics using a numeric UID or UID:GID. It rejects
+// user names so evaluator identity does not depend on image account databases.
 func (r *DockerRuntime) ExecAs(ctx context.Context, identity, user string, command []string, timeout time.Duration) (ExecResult, error) {
 	if !regexp.MustCompile(`^\d+(?::\d+)?$`).MatchString(user) {
 		return ExecResult{}, fmt.Errorf("Container execution user must be a numeric UID[:GID]")
@@ -650,6 +668,9 @@ func (r *DockerRuntime) removeExecPIDFile(ctx context.Context, identity, user, p
 	return nil
 }
 
+// Spawn attaches a non-PTY process with writable stdin and separate output streams.
+// When captureStderr is false, Stderr returns an already-closed reader. Callers
+// must drain output concurrently before waiting for process completion.
 func (r *DockerRuntime) Spawn(ctx context.Context, identity string, command []string, captureStderr bool) (Process, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -733,18 +754,29 @@ func (p *dockerProcess) watchCancellation() {
 
 type dockerExecStdin struct{ response client.ExecAttachResult }
 
+// Write sends bytes to the attached process without combining protocol streams.
 func (s dockerExecStdin) Write(p []byte) (int, error) {
 	if s.response.Conn == nil {
 		return 0, net.ErrClosed
 	}
 	return s.response.Conn.Write(p)
 }
+
+// Close sends stdin EOF while keeping the attached output streams readable.
 func (s dockerExecStdin) Close() error { return s.response.CloseWrite() }
 
+// Stdin returns the attached input stream; closing it sends EOF, not process termination.
 func (p *dockerProcess) Stdin() io.WriteCloser { return p.stdin }
+
+// Stdout returns the stdout pipe, which callers must drain to allow Wait to complete.
 func (p *dockerProcess) Stdout() io.ReadCloser { return p.stdout }
+
+// Stderr returns the stderr pipe, or a closed reader when capture was disabled.
+// Captured stderr must be drained independently of stdout.
 func (p *dockerProcess) Stderr() io.ReadCloser { return p.stderr }
 
+// Wait waits for output copying and returns the observed exit code and any
+// transport error. Callers must consume the output streams concurrently.
 func (p *dockerProcess) Wait() (int, error) {
 	p.mu.Lock()
 	if p.done {
@@ -793,6 +825,9 @@ func (p *dockerProcess) finish(code int, err error) {
 	}
 }
 
+// Poll reports whether exit and output-stream completion have been observed,
+// returning the exit code when available. False can also mean inspection failed
+// or output is still draining; it is not proof that the process is alive.
 func (p *dockerProcess) Poll() (int, bool) {
 	p.mu.Lock()
 	if p.done {
@@ -817,8 +852,12 @@ func (p *dockerProcess) Poll() (int, bool) {
 	}
 }
 
+// Terminate requests SIGTERM for the exec using a PID captured inside its container.
+// An already-observed exit requires no signal.
 func (p *dockerProcess) Terminate() error { return p.signal("TERM") }
-func (p *dockerProcess) Kill() error      { return p.signal("KILL") }
+
+// Kill requests SIGKILL using the same container-local PID capture as Terminate.
+func (p *dockerProcess) Kill() error { return p.signal("KILL") }
 func (p *dockerProcess) signal(signal string) error {
 	if _, done := p.Poll(); done {
 		p.cleanupPIDFile()
@@ -831,6 +870,8 @@ func (p *dockerProcess) signal(signal string) error {
 	return nil
 }
 
+// Address returns the first bridge IPv4 address found in sorted network-name order.
+// It does not publish a host port or fall back to a remote endpoint.
 func (r *DockerRuntime) Address(identity string) (string, error) {
 	if err := dockerValidate(identity, []string{"inspect"}); err != nil {
 		return "", err
@@ -855,6 +896,10 @@ func (r *DockerRuntime) Address(identity string) (string, error) {
 	return "", fmt.Errorf("Docker container has no IPv4 address")
 }
 
+// ExportWorkspace replaces the original host workspace with a staged copy of
+// the stopped container's final workspace, preserving deletions. It is a no-op
+// unless archive-copy transport has CopyBack enabled. Otherwise Stop must succeed
+// first, and workspace must match the original Start path.
 func (r *DockerRuntime) ExportWorkspace(ctx context.Context, identity, workspace string) error {
 	r.mu.Lock()
 	state := r.state[identity]
@@ -1079,6 +1124,8 @@ func dockerRemoveTree(name string) error {
 	return os.RemoveAll(name)
 }
 
+// Stop quiesces container processes before snapshot export or evaluation.
+// Missing and already-stopped containers are tolerated; daemon errors are not.
 func (r *DockerRuntime) Stop(ctx context.Context, identity string) error {
 	if identity == "" || strings.HasPrefix(identity, "-") {
 		return fmt.Errorf("Container identity and nonempty argv are required")
@@ -1096,6 +1143,8 @@ func (r *DockerRuntime) Stop(ctx context.Context, identity string) error {
 	return nil
 }
 
+// Remove releases a container and its runtime state, tolerating an already-missing
+// container. Export any copy-backed workspace before removal.
 func (r *DockerRuntime) Remove(ctx context.Context, identity string) error {
 	if identity == "" || strings.HasPrefix(identity, "-") {
 		return fmt.Errorf("Container identity and nonempty argv are required")

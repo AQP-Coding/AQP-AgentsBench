@@ -16,6 +16,16 @@ go run ./cmd/aqp-bench --artifacts /tmp/aqp-demo dashboard
 
 Open `http://127.0.0.1:8765`. The demo reads an original CSV attachment, simulates an agent writing a report, forwards one request to a local mock provider, runs two hidden weighted checks separately, and retains results. It is explicitly marked `simulation: true`; it is **not** evidence that a real coding agent works.
 
+### Verification levels
+
+| Check | What it proves | Boundary |
+|---|---|---|
+| `demo` | Orchestration, local gateway, verifiers and persistence; the CSV example earns 5/5 points | Simulated agent and provider; no Docker |
+| Docker gateway probe | Actual container-to-Go-gateway reachability, capability checks and accounting against a local mock | No real agent or provider |
+| Live `run` | One configured agent/model/task path, including its final-state checks | Billable; does not exhaust failure, dialog or subagent cases |
+
+Run the [Docker gateway probe](docs/gateway.md#protocol-evidence-and-verification) before a paid smoke test, especially on WSL/Docker Desktop. The bundled manifest's placeholder image/model must be replaced for a live run.
+
 For an installed CLI, use `go install ./cmd/aqp-bench`, add your Go binary directory to `PATH`, then replace `go run ./cmd/aqp-bench` with `aqp-bench`. The host engine uses Go, the supported Moby Docker SDK and a pure-Go SQLite driver. Python remains for selected benchmark verifiers/task fixtures, not host engine modules or host engine unit tests. Existing manifests and retained SQLite/JSON/JSONL data keep their formats.
 
 ## Run a real campaign
@@ -42,13 +52,19 @@ For an installed CLI, use `go install ./cmd/aqp-bench`, add your Go binary direc
 
 Keep the campaign terminal running. In another terminal using the same `--artifacts` directory:
 
+`RUN_ID` and `REQUEST_ID` below are placeholders, not literal identifiers. A run ID comes from `list[].id` or `questions[].run_id`; a request ID comes from `questions[].id`. Set `ARTIFACTS` to the exact directory selected for the run.
+
 ```bash
-go run ./cmd/aqp-bench questions
-go run ./cmd/aqp-bench answer RUN_ID REQUEST_ID yes
-go run ./cmd/aqp-bench stop RUN_ID
-go run ./cmd/aqp-bench show RUN_ID
-go run ./cmd/aqp-bench rerun RUN_ID --api-key-env OPENROUTER_API_KEY
+ARTIFACTS=.aqp-bench
+go run ./cmd/aqp-bench --artifacts "$ARTIFACTS" list
+go run ./cmd/aqp-bench --artifacts "$ARTIFACTS" questions
+go run ./cmd/aqp-bench --artifacts "$ARTIFACTS" answer RUN_ID REQUEST_ID yes
+go run ./cmd/aqp-bench --artifacts "$ARTIFACTS" stop RUN_ID
+go run ./cmd/aqp-bench --artifacts "$ARTIFACTS" show RUN_ID
+go run ./cmd/aqp-bench --artifacts "$ARTIFACTS" rerun RUN_ID --api-key-env OPENROUTER_API_KEY
 ```
+
+`list`, `show` and `questions` make no model calls. `rerun` starts a new live run and can incur charges.
 
 Pending requests contain their full question/choice metadata. Pi confirmations accept `yes/no`; Pi text/select dialogs accept text. OpenCode permissions require `once`, `always`, or `reject`; question groups require JSON, for example `'[["First option"], ["Second option"]]'`. Use `null` to cancel a supported dialog. Each accepted human reply counts once, including approvals.
 
@@ -59,6 +75,8 @@ Ctrl+C requests a campaign stop; stopped workspaces are still evaluated. Per-run
 ## Scoring and artifacts
 
 Each unit test has its own assigned score. Passed units earn their full points; failed/skipped/timed-out/not-run units earn none. Reports show earned/max score, weighted score percentage, and raw passed-test percentage. A broken evaluator is an evaluation failure, not an invented zero agent score. For pytest, select exactly one collected test per entry; the evaluator inspects JUnit results and disables project conftest/autoload plugins. For npm/other commands, authors must ensure zero exit means a real pass, not a skipped or empty suite.
+
+A `completed` lifecycle status or zero `run` exit code does not imply passing verifiers. Check each test status and the evaluation score; the CSV example requires both checks passed, 5/5 points, and `report.txt` containing exactly `10` followed by a newline.
 
 Hidden test files are staged outside the agent workspace and mounted read-only only into separate evaluator containers after the agent container has stopped. Evaluators receive a fresh read-only workspace snapshot. Scoring math runs in the host platform; task authors must write meaningful outcome checks. See [security boundaries](docs/security.md): read-only mounts are not a universal defense against hostile generated code executing inside a test process.
 
@@ -85,5 +103,7 @@ odd/tasks/go-engine-migration.md  migration scope, commits, and evidence
 ```
 
 Run `go test ./...`, `go test -race ./...`, and `go vet ./...` for native checks. Opt into local Docker checks with `AQP_DOCKER_INTEGRATION=1 go test ./internal/bench -run '^TestDockerIntegration' -count=1`; prepare the documented image first, since tests do not pull it. These tests create and clean up only their own containers. Tests use temporary directories and local fixtures; they must not call paid providers, reuse ambient credentials, or launch remote workloads. When changing behavior, add a failing public-boundary test first, then implement and verify. Keep scenario evaluators hidden from agents, validate final observable behavior rather than attempted actions, and keep tests/docs with each behavior change.
+
+Follow [Go Doc Comments](https://go.dev/doc/comment) for exported production symbols: start with the exact identifier and use “reports whether” for boolean results. Document ownership, defaults, invariants and failure cases rather than narrating obvious statements. Add internal comments where a contract or rationale is not apparent; avoid boilerplate on self-explanatory helpers and tests.
 
 The [migration specification](odd/tasks/go-engine-migration.md) records the Go/Python boundary and verification; the [original specification](odd/tasks/initial-release.md) remains historical context. [Agent integration](docs/agents.md) documents supported protocol surfaces and attribution gaps; [gateway accounting](docs/gateway.md) documents streaming, failures, and limits. Current local chain branches are recorded in the task log. Publishing, pushes, releases, and license selection remain owner decisions; this implementation does not perform them.

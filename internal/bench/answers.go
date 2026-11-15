@@ -5,6 +5,10 @@ import (
 	"strings"
 )
 
+// CoerceAnswer validates a raw operator reply using the request metadata.
+// The exact string "null" cancels any request. Confirmation replies become booleans;
+// structured questions require JSON arrays of string arrays. Other accepted replies
+// remain strings without trimming.
 func CoerceAnswer(reply string, metadata Record) (any, error) {
 	if reply == "null" {
 		return nil, nil

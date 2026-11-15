@@ -21,21 +21,33 @@ import (
 // model gateway. Keeping it injectable makes the entire run path testable
 // without a provider or a listening socket.
 type RunGateway struct {
-	Token                string
-	URL                  string
-	Attempts             func() []Record
-	LimitReached         func() bool
+	// Token is the local capability passed to isolated agent configuration.
+	Token string
+	// URL is the model endpoint reachable from the agent runtime.
+	URL string
+	// Attempts returns accounting snapshots; nil means no observed attempts.
+	Attempts func() []Record
+	// LimitReached reports whether known spend reached the cap; nil means false.
+	LimitReached func() bool
+	// InfrastructureFailed reports whether a gateway failure occurred; nil means false.
 	InfrastructureFailed func() bool
-	Close                func() error
+	// Close releases gateway resources; nil means no cleanup is needed.
+	Close func() error
 }
 
 // RunOptions configures campaign execution and its replaceable external edges.
 type RunOptions struct {
-	APIKey         string
+	// APIKey is the explicitly selected provider credential, used only by the
+	// gateway and redacted from persisted records, never passed into the container.
+	APIKey string
+	// RuntimeFactory defaults to NewDockerRuntime when nil.
 	RuntimeFactory func() (Runtime, error)
+	// GatewayFactory defaults to the real fixed-upstream gateway when nil.
 	GatewayFactory func(string, *float64) (RunGateway, error)
+	// AdapterFactory defaults to the configured Pi or OpenCode adapter when nil.
 	AdapterFactory func(Runtime, string, []string, string) AgentAdapter
-	Notify         func(string)
+	// Notify emits operator messages; nil discards them.
+	Notify func(string)
 }
 
 type runControl struct {
