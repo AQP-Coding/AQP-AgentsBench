@@ -18,10 +18,11 @@ Delivery: local work-unit commits on the feature branch; push/PR not authorized.
 - [x] T1 — S1,S2 — inline — LICENSE, AI_POLICY.md
 - [x] T2 — S3,S6 — inline — CONTRIBUTING.md, PR template
 - [x] T3 — S4 — inline — CONTRIBUTORS.md
-- [ ] T4 — S5,S7 — inline — CODEBASE-GUIDE + docs/codebase/*; README links
+- [x] T4 — S5,S7 — inline — CODEBASE-GUIDE + docs/codebase/*; README links
 
 ## Log
 
 - L1 (2026-11-16): "I have a small group of developers and I am launching a new open-source repo in GitHub, "AQP-AgentsBench" in this workspace, which consist on automatic benchmarks for AI agents, the codebase is 99% in Go and some files in Docker and Python. In this workspace you aslo have the codebase from another project called "gentle-ai" which has good documentation, I need you to review all the documentation conventions specially but not limited to:  AI_POLICY, CONTRIBUTING, CONTRIBUTORS, LICENSE, docs/CODEBASE-GUIDE.md (90s mental model, guide pages, recommended reading path). The idea is to adequate these conventions to the "AQP-AgentsBench" project, please use ODD and create a new branch for this, you are not alowed to push."
 - L2 (2026-11-16): license answer: "MIT, "Copyright (c) 2026 AQP-Coding"". Scope answer: "Yes: CODEBASE-GUIDE.md plus a lean docs/codebase/ set ... and a PR template".
 - Route: all inline; no Writer trigger (units small, sequential, share facts).
+- Evidence: all relative links in README/docs/*.md resolve (script); `gofmt -l .` clean; commits T1 abf45e2, T2/T3/T4 see `git log`. Not run: `go test` (docs-only, no Go changes). Open: maintainer GitHub handles in CONTRIBUTORS.md are placeholders.
