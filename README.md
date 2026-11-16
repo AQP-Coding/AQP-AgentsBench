@@ -106,4 +106,6 @@ Run `go test ./...`, `go test -race ./...`, and `go vet ./...` for native checks
 
 Follow [Go Doc Comments](https://go.dev/doc/comment) for exported production symbols: start with the exact identifier and use “reports whether” for boolean results. Document ownership, defaults, invariants and failure cases rather than narrating obvious statements. Add internal comments where a contract or rationale is not apparent; avoid boilerplate on self-explanatory helpers and tests.
 
+New here? Start with the [Codebase Guide](docs/CODEBASE-GUIDE.md), then read [CONTRIBUTING](CONTRIBUTING.md), the [AI-assisted contribution policy](AI_POLICY.md) and the [contributors list](CONTRIBUTORS.md). Licensed under the [MIT License](LICENSE).
+
 The [migration specification](odd/tasks/go-engine-migration.md) records the Go/Python boundary and verification; the [original specification](odd/tasks/initial-release.md) remains historical context. [Agent integration](docs/agents.md) documents supported protocol surfaces and attribution gaps; [gateway accounting](docs/gateway.md) documents streaming, failures, and limits. Current local chain branches are recorded in the task log. Publishing, pushes, releases, and license selection remain owner decisions; this implementation does not perform them.

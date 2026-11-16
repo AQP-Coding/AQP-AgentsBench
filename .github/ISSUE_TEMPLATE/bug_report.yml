@@ -1,0 +1,134 @@
+name: Bug Report
+description: Report a bug in AQP-AgentsBench
+labels: ["bug"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## How this works
+
+        1. **Submit** this report. A maintainer reviews it and agrees on scope.
+        2. **Then** you (or anyone) may open a PR that references it. See [CONTRIBUTING.md](https://github.com/AQP-Coding/AQP-AgentsBench/blob/main/CONTRIBUTING.md).
+
+        **Never paste API keys, gateway tokens, or transcripts containing credentials.** Report vulnerabilities privately via a security advisory.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Pre-flight Checklist
+      options:
+        - label: I have searched [existing issues](https://github.com/AQP-Coding/AQP-AgentsBench/issues) and this is not a duplicate
+          required: true
+        - label: I removed all credentials and secrets from anything I paste below
+          required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear and concise description of the bug.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: Exact commands, manifest (redacted), and image used.
+      value: |
+        1. 
+        2. 
+        3. 
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: Include exit code and whether this was the offline demo, a Docker probe, or a live run.
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      description: Output of `git rev-parse --short HEAD` or the installed version
+    validations:
+      required: true
+
+  - type: input
+    id: go
+    attributes:
+      label: Go and Docker versions
+      description: Output of `go version` and `docker version --format '{{.Server.Version}}'`
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Linux x86_64
+        - Linux x86_64 (WSL)
+        - Other (unsupported, please describe)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Agent
+      options:
+        - Pi
+        - OpenCode
+        - Pi or OpenCode with a harness (e.g. Gentle-ai)
+        - Not applicable
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected Area
+      options:
+        - CLI (commands, flags)
+        - Manifest / campaign validation
+        - Workspace / repository snapshot
+        - Docker runtime / harness
+        - Agent adapter (Pi, OpenCode)
+        - Gateway / accounting
+        - Evaluation / scoring
+        - Dashboard
+        - Benchmark task / verifier
+        - Agent image
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / Error Output
+      description: Redacted output. Auto-formatted as code.
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+    validations:
+      required: false
