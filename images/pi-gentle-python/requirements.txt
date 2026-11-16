@@ -1,0 +1,2 @@
+# Runtime dependencies for Python benchmark verifiers; the host engine is Go.
+pytest>=8

@@ -20,55 +20,58 @@ SSH sessions, registry logins, or remote daemon credentials.
 
 | Runtime boundary | Behavior |
 |---|---|
-| Workspace | Dedicated host directory bind-mounted at `/workspace` when visible to the daemon; otherwise copied through the Docker CLI and exported before container removal |
+| Workspace | Dedicated host directory bind-mounted at `/workspace` when visible to the daemon; otherwise copied through the Docker Engine archive API and exported before container removal |
 | Configuration | Selected isolated home at `/home/agent`; files are copied into container tmpfs, never bind-mounted from host temp paths |
 | User | Host UID/GID, dropped capabilities, no new privileges |
 | Networking | Normal bridge egress and `host.docker.internal` host-gateway alias |
 | Server | OpenCode listens inside its bridge container, authenticated with an ephemeral password; no published host port |
 | Evaluation | Separate container with a fresh snapshot under the run artifact directory, optional read-only `/workspace`, and trusted read-only `/evaluation` inputs; copy fallback removes write permission and runs tests as a UID distinct from the file owner |
-| Cleanup | Agent workspace is exported before stopping/removing its container; evaluation remains a separate container |
+| Cleanup | Agent container is stopped before exporting its workspace, then removed; evaluation remains a separate container |
 
-`DockerRuntime.start(image, workspace, *, home=None, environment=None,
-evaluation=None, readonly_workspace=False, copy_back=False)` returns a container identity.
-Generated home staging is copied through the Docker client into container tmpfs,
+`DockerRuntime.Start(ctx, image, workspace, StartOptions)` returns a container identity.
+Generated home staging is copied through the Docker Engine SDK into container tmpfs,
 avoiding a bind mount from host temporary directories. Marker probes verify each
 requested host bind. If a probe fails, the runtime retries once without host binds
 and stages full directory trees into the container root filesystem with
-`docker cp`; Docker does not support direct `docker cp` to or from tmpfs. The
+the Docker Engine archive-copy API; this fallback stages into the container root filesystem rather than tmpfs. The
 fallback container starts as the agent UID with `/tmp` as its initial workdir, so
 copied workspace files and directories retain the expected ownership and modes.
 Read-only evaluator inputs are copied from a private host staging tree with write
 bits removed, and evaluator commands run as a distinct unprivileged UID. Copy
 failures are fatal and include both the probe and transfer errors. With
-`copy_back=True`, the caller must invoke `export_workspace(container, workspace)`
-before removal; export copies the complete rootfs workspace into a fresh host
+`StartOptions.CopyBack` enabled, the caller must invoke `Stop(ctx, container)` and
+then `ExportWorkspace(ctx, container, workspace)` before removal; export copies the complete rootfs workspace into a fresh host
 staging directory and replaces the prior tree, preserving deletions and root
 directory metadata.
 The normal bind path remains unchanged. Snapshots are placed under the selected
-artifact directory. `exec(container, argv, timeout=300)` returns a text `CompletedProcess` so
-the caller checks the exit code. `spawn(container, argv)` returns binary stdin/stdout
+artifact directory. `Exec(ctx, container, argv, timeout)` returns an `ExecResult` so
+the caller checks its exit code and error. `Spawn(ctx, container, argv, captureStderr)` returns a `Process` with binary stdin/stdout
 pipes; Pi may opt into a bounded stderr pipe, which is drained concurrently and
 retained up to 64 KiB in startup/EOF diagnostics.
 Before each evaluator test, required files are checked inside the container; missing
 or unreadable mounts are reported as evaluator infrastructure errors, not test failures.
-`address(container)` returns its bridge IPv4 address. `stop`/`remove` tolerate
-missing containers, but do not suppress daemon failures. Host-to-bridge HTTP
-requires native Linux Docker networking. The tested Docker Desktop/WSL daemon could
-not read workspace files from the WSL filesystem; the runtime detects this with a
-temporary marker and falls back to client-mediated copy. A complete Docker copy
-round-trip is tested locally; provider/model-backed execution remains a separate
-integration check.
+`Address(container)` returns its bridge IPv4 address. `Stop`/`Remove` tolerate
+missing containers, but do not suppress daemon failures. Host-to-container bridge
+HTTP (used by OpenCode) requires native Linux Docker networking; the opposite
+container-to-host gateway probe does not verify that route.
+
+Workspace visibility is a separate boundary. The tested Docker Desktop/WSL daemon
+could not read WSL bind-mounted files; a temporary marker detects this and selects
+archive-copy fallback, preserving final workspace changes through export. The
+[gateway probe](gateway.md#protocol-evidence-and-verification) separately verifies
+container-to-host HTTP using an explicit IPv4 listener. Local copy and mocked
+gateway checks do not prove real agent/provider/model compatibility.
 
 ## Select a harness without inheriting secrets
 
 Both explicit and inherit modes stage the manifest's selected `files` only.
-`harness.stage(files, home)` preserves bytes and directory trees; it rejects
+`StageHarness(files, home)` preserves bytes and directory trees; it rejects
 traversal, symlinks, overlapping targets, credential filenames, recognized private
 keys, and literal credential fields in JSON. It does not infer or copy host
 configuration automatically. Review arbitrary selected text/code yourself:
 secret-pattern checks are not a universal secret detector.
 
-`harness.configure(home, kind, model, gateway_url, token)` preserves unrelated
+`ConfigureHarness(home, kind, model, gatewayURL, token)` preserves unrelated
 settings, instructions, hooks, skills, and plugins. It adds the `aqp` provider and
 returns the **only** explicit environment the caller should pass to the container.
 The local gateway token is an environment reference, never literal configuration;
@@ -80,7 +83,7 @@ and [OpenCode provider configuration](https://opencode.ai/docs/providers/) descr
 these custom-provider APIs. [OpenCode precedence](https://opencode.ai/docs/config/)
 puts runtime inline configuration after project configuration.
 
-Call `harness.validate_workspace(workspace, kind, model)` before execution to
+Call `ValidateWorkspace(workspace, kind, model)` before execution to
 reject known repository-level provider/model overrides. Executable plugins may
 spawn their own clients, acquire credentials, or alter networking; normal outbound
 egress is NOT a forced-routing firewall. Such harness behavior is unsupported and
@@ -97,7 +100,7 @@ that event fail closed when the process exits; configure an agent-time limit to
 bound an older long-lived process. See [Pi RPC](https://raw.githubusercontent.com/badlogic/pi-mono/main/packages/coding-agent/docs/rpc.md).
 
 Pi dialog `ask` metadata contains the complete request. Replies are booleans for
-`confirm`, strings for `select`/`input`/`editor`, or `None` to cancel. Notification
+`confirm`, strings for `select`/`input`/`editor`, or JSON `null` to cancel. Notification
 methods do not count as interventions. Unsupported terminal-only extension widgets
 cannot be preserved through RPC; see [Pi extension UI](https://raw.githubusercontent.com/badlogic/pi-mono/main/packages/coding-agent/docs/rpc-extension-ui.md).
 
@@ -146,10 +149,13 @@ subagent accounting.
 ## Local checks
 
 ```bash
-PYTHONPATH=. pytest -q -p no:cacheprovider tests/test_adapters.py tests/test_docker.py tests/test_harness.py
+go test ./internal/bench -run '^(TestPi|TestOpenCode|TestDocker|TestHarness|TestPrepareWorkspace|TestCopyFiles)'
+go test -race ./internal/bench
+AQP_DOCKER_INTEGRATION=1 go test ./internal/bench -run '^TestDockerIntegration' -count=1
 ```
 
-These checks use fake Docker calls, local Python subprocesses, and a loopback HTTP
-fixture. No agent image, network provider, paid request, or ambient credential is
-used. A user-authorized live smoke test remains required for each selected image,
+Default checks use fake Docker API calls, local process streams, and loopback HTTP
+fixtures. The explicitly enabled Docker integration checks use the prepared image
+and short-lived owned containers. Neither suite launches a real agent, contacts a
+model provider, spends model tokens, or reuses ambient credentials. A user-authorized live smoke test remains required for each selected image,
 agent version, and executable harness combination.
