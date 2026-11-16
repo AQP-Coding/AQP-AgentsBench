@@ -26,3 +26,4 @@ Delivery: local work-unit commits on the feature branch; push/PR not authorized.
 - L2 (2026-11-16): license answer: "MIT, "Copyright (c) 2026 AQP-Coding"". Scope answer: "Yes: CODEBASE-GUIDE.md plus a lean docs/codebase/ set ... and a PR template".
 - Route: all inline; no Writer trigger (units small, sequential, share facts).
 - Evidence: all relative links in README/docs/*.md resolve (script); `gofmt -l .` clean; commits T1 abf45e2, T2/T3/T4 see `git log`. Not run: `go test` (docs-only, no Go changes). Open: maintainer GitHub handles in CONTRIBUTORS.md are placeholders.
+- L3 (2026-11-16): "The Issue template is missing, please add it" → S8: `.github/ISSUE_TEMPLATE/{bug_report,feature_request,config}.yml` adapted from gentle-ai (default `bug`/`enhancement` labels; no status/type label system, which this repo lacks). T5 done, YAML parses.

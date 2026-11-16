@@ -1,0 +1,82 @@
+name: Feature Request
+description: Suggest a feature or enhancement for AQP-AgentsBench
+labels: ["enhancement"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## How this works
+
+        1. **Submit** this request. A maintainer reviews it and agrees on scope and design.
+        2. **Then** open a PR that references it. Changes to manifests, CLI commands, persisted data, or the gateway need agreement first. See [CONTRIBUTING.md](https://github.com/AQP-Coding/AQP-AgentsBench/blob/main/CONTRIBUTING.md).
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Pre-flight Checklist
+      options:
+        - label: I have searched [existing issues](https://github.com/AQP-Coding/AQP-AgentsBench/issues) and this is not a duplicate
+          required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected Area
+      options:
+        - CLI (commands, flags)
+        - Manifest / campaign validation
+        - Workspace / repository snapshot
+        - Docker runtime / harness
+        - Agent adapter (Pi, OpenCode)
+        - Gateway / accounting
+        - Evaluation / scoring
+        - Dashboard
+        - Benchmark task / verifier
+        - Agent image
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / Motivation
+      description: What can't you do today, or what is hard? Describe the benchmark scenario if relevant.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Solution
+      description: Expected behavior, CLI or manifest shape, and how it would be verified.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+    validations:
+      required: false
+
+  - type: dropdown
+    id: compat
+    attributes:
+      label: Compatibility impact
+      description: Would this change existing manifests, CLI behavior, or retained SQLite/JSON/JSONL data?
+      options:
+        - No, purely additive
+        - Yes, changes an existing contract
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+    validations:
+      required: false

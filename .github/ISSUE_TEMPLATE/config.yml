@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions & Discussions
+    url: https://github.com/AQP-Coding/AQP-AgentsBench/discussions
+    about: Use discussions for questions and ideas, not issues
+  - name: Security vulnerability
+    url: https://github.com/AQP-Coding/AQP-AgentsBench/security/advisories/new
+    about: Report vulnerabilities privately, never in a public issue

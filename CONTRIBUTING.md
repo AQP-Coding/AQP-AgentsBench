@@ -20,7 +20,7 @@ Please read this guide before opening a pull request. A small, predictable workf
 
 **Open an issue before a non-trivial PR.** Typos and small doc fixes may go straight to a PR.
 
-1. Search existing issues, then open one describing the problem or proposal, with commands and observed output.
+1. Search existing issues, then open one using the Bug Report or Feature Request template, describing the problem or proposal, with commands and observed output.
 2. Wait for a maintainer to agree on scope. Behavior changes to manifests, CLI commands, persisted data, or the gateway need agreement first because others consume them.
 3. Comment that you are taking it.
 4. Open a PR that references the issue (`Closes #N` or `Refs #N`).
@@ -114,7 +114,7 @@ Organize commits by deliverable unit, not file type: one behavior with its code,
 
 ## Pull Request Rules
 
-- Link the issue and fill in the [PR template](.github/PULL_REQUEST_TEMPLATE.md), including the AI-assistance declaration.
+- Link the issue (opened from the [issue templates](.github/ISSUE_TEMPLATE)) and fill in the [PR template](.github/PULL_REQUEST_TEMPLATE.md), including the AI-assistance declaration.
 - Aim for **about 400 changed lines or fewer** (additions + deletions). Split larger work into reviewable, ordered PRs.
 - Keep the change within the agreed scope; unrelated cleanups go in a separate PR.
 - All checks in [Testing](#testing) pass, and you report any you could not run.
