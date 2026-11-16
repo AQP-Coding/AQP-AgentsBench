@@ -16,7 +16,7 @@ Delivery: local work-unit commits on the feature branch; push/PR not authorized.
 ## Tasks
 
 - [x] T1 — S1,S2 — inline — LICENSE, AI_POLICY.md
-- [ ] T2 — S3,S6 — inline — CONTRIBUTING.md, PR template
+- [x] T2 — S3,S6 — inline — CONTRIBUTING.md, PR template
 - [ ] T3 — S4 — inline — CONTRIBUTORS.md
 - [ ] T4 — S5,S7 — inline — CODEBASE-GUIDE + docs/codebase/*; README links
 
